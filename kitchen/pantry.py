@@ -4,11 +4,11 @@ A perishable carries a quantity, a unit, the date it came in and a rough
 shelf life, because that is where waste happens and where the arithmetic has
 to work. A staple carries a level and nothing else: nobody weighs their
 rice, and a pantry that asks them to is a pantry abandoned inside a
-fortnight. The precision is spent where it is repaid (pm/backlog.md).
+fortnight (pm/backlog.md).
 
 The grade is a column rather than two tables, so a thing can change grade
-without moving. That is also why every function here takes an ingredient
-and asks the row what grade it is, rather than the caller knowing.
+without moving. That is also why every function here takes an ingredient and
+asks the row what grade it is; the caller never has to know.
 
 Nothing in this module writes to `stock_move`. Moving stock without a ledger
 line is how the table starts describing a kitchen that does not exist, so
@@ -24,8 +24,8 @@ GRADES = (PERISHABLE, STAPLE)
 # A staple's whole vocabulary. 'out' is a person's word: see `subtract`.
 LEVELS = ("in_stock", "low", "out")
 
-# The day a perishable turns. Postgres adds an integer to a date as days,
-# which is the whole arithmetic the planner's waste term rests on.
+# The day a perishable turns. Postgres adds an integer to a date as days: the
+# whole arithmetic the planner's waste term rests on.
 TURNS_ON = "(acquired_on + shelf_life_days)"
 
 FIELDS = ("ingredient", "grade", "quantity", "unit", "acquired_on", "shelf_life_days", "level")
@@ -37,7 +37,7 @@ def amount(value):
     A caller hands over whatever a recipe or a form gave it, and half a kilo
     arriving as a float and leaving as 0.49999 is the kind of drift that is
     never noticed and never forgiven. kitchen/moves.py writes quantities too,
-    which is why this is not private to this module.
+    so this is not private to this module.
     """
     if value is None or isinstance(value, decimal.Decimal):
         return value
@@ -76,11 +76,10 @@ def add_staple(cx, ingredient, level="in_stock"):
 def find(cx, ingredient):
     """The row holding an ingredient, or None.
 
-    Matched on lower(ingredient), which is what the index is on. A second lot
-    of the same thing is its own row - two chickens bought a week apart turn
-    a week apart - and the one nearest turning is the one handed back, so
-    subtracting cooks the older stock first. That ordering is the waste rule
-    in one line.
+    Matched on lower(ingredient), the way the index is. A second lot of the
+    same thing is its own row - two chickens bought a week apart turn a week
+    apart - and the one nearest turning is the one handed back, so subtracting
+    cooks the older stock first.
     """
     return cx.execute(
         "select * from pantry where lower(ingredient) = lower(%s)"
@@ -139,8 +138,7 @@ def turning_soonest(cx, within_days=None, limit=None, today=None):
     Today is the household's, not the database's. `current_date` is whatever
     timezone the server happens to run in, which on this stack is UTC, so an
     evening west of Greenwich would age every perishable by a day and tell
-    someone their spinach turns tomorrow when it turns the day after. The
-    caller's date is the one the household keeps.
+    someone their spinach turns tomorrow when it turns the day after.
     """
     today = today or datetime.date.today()
     sql = ("select *, " + TURNS_ON + " as turns_on, " + TURNS_ON + " - %s::date as days_left"
@@ -159,10 +157,10 @@ def turning_soonest(cx, within_days=None, limit=None, today=None):
 
 
 def update(cx, pantry_id, **fields):
-    """Correct a row by hand, which is what the board does.
+    """Correct a row by hand, as the board does.
 
-    A grade change is a normal edit and not a special case, which is the
-    point of the grade being a column.
+    A grade change is a normal edit, not a special case: the point of the
+    grade being a column.
     """
     unknown = [name for name in fields if name not in FIELDS]
     if unknown:
@@ -192,8 +190,8 @@ def restock(cx, ingredient, quantity=None, unit=None, shelf_life_days=None,
     A staple comes back to 'in_stock'. A perishable arriving is a new row
     rather than a bigger number on the old one, because two lots bought a
     week apart turn a week apart and adding them together loses the older
-    date - which is the one the planner needs. The same lot arriving twice on
-    one day is the exception, and adding is right there.
+    date, the one the planner needs. The same lot arriving twice on one day is
+    the exception, and adding is right there.
 
     An unstated shelf life is inherited from the last lot of the same thing,
     since a household buys the same chicken repeatedly; an unstated grade is
@@ -227,21 +225,21 @@ def restock(cx, ingredient, quantity=None, unit=None, shelf_life_days=None,
 
 
 def subtract(cx, ingredient, quantity=None, unit=None):
-    """Take stock out, which the two grades do not do the same way.
+    """Take stock out. The two grades do not do it the same way.
 
     A perishable's quantity is arithmetic and may land on zero. A staple's
     level is a judgement, so cooking with one moves it to 'low' at most and
     never to 'out': only the person looking at the jar knows it is empty, and
     a planner that decided that for them would leave rice off the list.
-    Saying a thing is gone is `empty` below, and it is a person's word.
+    Saying a thing is gone is `empty` below.
 
-    A perishable used without a quantity is left alone and not guessed at.
-    The move is still recorded by the caller, so the drift shows in the
-    ledger rather than becoming a number the waste figure is computed from.
+    A perishable used without a quantity is left alone, not guessed at. The
+    move is still recorded by the caller, so the drift shows in the ledger
+    rather than becoming a number the waste figure is computed from.
 
-    Returns the row as it now stands, or None when the house does not hold
-    the thing at all - which is a fact worth handing back rather than
-    raising, since cooking with something unrecorded is normal.
+    Returns the row as it now stands, or None when the house does not hold the
+    thing at all: a fact worth handing back, not raising over, since cooking
+    with something unrecorded is normal.
     """
     held = find(cx, ingredient)
     if held is None:
@@ -254,14 +252,14 @@ def subtract(cx, ingredient, quantity=None, unit=None):
         # A recipe's words are not the pantry's words, and neither are its
         # units. The conversion belongs in the ingredient_product table that
         # item brings; assuming one here would subtract a confident wrong
-        # number, which is worse than the caller being told.
+        # number. Telling the caller is better.
         raise ValueError("%s is held in %s, not %s" % (held["ingredient"], held["unit"], unit))
     left = (held["quantity"] or 0) - amount(quantity)
     return update(cx, held["id"], quantity=max(left, decimal.Decimal(0)))
 
 
 def empty(cx, ingredient):
-    """Say a thing is gone, which only a person can say.
+    """Say a thing is gone. Only a person can say it.
 
     This is the 'finished' and 'discarded' end of the ledger: the shelf is
     empty, whatever the arithmetic thinks. A staple reaches 'out' here and

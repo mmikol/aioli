@@ -5,8 +5,7 @@ before anything can be subtracted, and it is fuzzy in two ways - the wording
 differs and the unit differs. The unit is `matching.units`; the wording is
 here. Nothing in this module reads the database: the rows are handed in, so
 every decision it makes can be tested without one, and so the board, the
-planner and the grocery list all get the same answer from the same
-arithmetic.
+planner and the grocery list all get the same answer.
 
 The one rule that shapes everything below: it will be wrong often enough
 that a silent wrong answer is worse than an asked question. So a match
@@ -14,11 +13,11 @@ carries a confidence and its runners-up, a low one is never subtracted from
 the pantry, and the only match that is trusted outright is one a person
 confirmed.
 
-Both sides of this join are ingredients, which is all a pantry needs and all
-the MVP has. A product - a brand, a pack size, a shelf label - arrives later
-by hanging underneath the ingredient it satisfies: the pantry keeps saying
-"tomatoes, tinned", a product row points at that ingredient, and `resolve`
-and `cover` never learn that products exist.
+Both sides of this join are ingredients, which is all a pantry needs. A
+product - a brand, a pack size, a shelf label - arrives later by hanging
+underneath the ingredient it satisfies: the pantry keeps saying "tomatoes,
+tinned", a product row points at that ingredient, and `resolve` and `cover`
+never learn that products exist.
 """
 import difflib
 import hashlib
@@ -28,10 +27,10 @@ from dataclasses import dataclass
 
 from matching.units import Conversion, Converted, convert, normalise_unit, parse_quantity
 
-# Below this a name is not a candidate at all; below CONFIDENT it is a
-# question rather than an answer. The gap between them is deliberate: a
-# spelling slip should not cost a person a tap, and a genuine ambiguity
-# should not be resolved by a machine that has no way to know.
+# Below this a name is not a candidate; below CONFIDENT it is a question
+# rather than an answer. The gap between them is deliberate: a spelling slip
+# should not cost a person a tap, and a genuine ambiguity should not be
+# resolved by a machine that has no way to know.
 FUZZY_CUTOFF = 0.6
 CONFIDENT = 0.9
 
@@ -81,8 +80,7 @@ class Alias:
 
     A row of `ingredient_alias`. The wording itself is not carried, here or
     in the table, because it is the service's text (docs/db.md); the digest
-    answers the only question a join asks, which is whether this has been
-    seen before.
+    answers the only question a join asks - whether this has been seen before.
     """
     wording_key: str
     ingredient: str
@@ -162,8 +160,7 @@ class Coverage:
     what this is" are different answers. A name nothing in the pantry
     resembles is missing and not a question: the house plainly does not have
     it. A name that resembles something the house does have, without anybody
-    having said they are the same thing, is the question - that is the one
-    that would otherwise be a silent wrong answer.
+    having said they are the same thing, is the question.
 
     The grocery list reads `missing` and puts `uncertain` on the board as
     questions; the planner scores on `covered`.
@@ -202,9 +199,8 @@ def normalise_name(wording: str | None) -> str:
     """A wording reduced to the thing itself: no amount, no knifework.
 
     "2 cups finely diced fresh tomatoes" and "Tomatoes, diced" both land on
-    "tomato", which is what makes an alias worth storing and a fuzzy match
-    worth trying. The pantry's own names go through the same function, so
-    the two sides are always compared on the same terms.
+    "tomato". The pantry's own names go through the same function, so the
+    two sides are always compared on the same terms.
     """
     if not wording:
         return ""
@@ -238,7 +234,7 @@ def alias_key(wording: str) -> str:
     A digest rather than the wording because the wording is the service's
     text and may not be stored (docs/db.md), and because equality is the
     only thing a stored alias is ever asked for. Fuzzy matching runs against
-    the household's own names, which are the household's to read.
+    the household's own names.
     """
     return hashlib.sha256(normalise_name(wording).encode("utf-8")).hexdigest()
 
@@ -269,8 +265,8 @@ def resolve(wording: str, household: Iterable[str],
     `aliases` is what has already been answered, keyed by `alias_key`.
 
     A confirmed alias and an exact name are certain; anything else comes
-    back with a confidence under CONFIDENT and its candidates, which is the
-    board's cue to ask instead of the planner's cue to subtract.
+    back with a confidence under CONFIDENT and its candidates - the board's
+    cue to ask, not the planner's cue to subtract.
     """
     name = normalise_name(wording)
     index: dict[str, str] = {}

@@ -40,8 +40,7 @@ DAYS = 7
 # repo to write something unbounded. How much of the host the stack may take
 # is configuration and the host is not settled - it may be a 16 GB machine
 # with a model running beside it - so the work here is bounded whatever the
-# machine, and a machine with room is not a reason to write something that
-# needs it (pm/backlog.md). One plan is:
+# machine (pm/backlog.md). One plan is:
 #
 #   at most three calls out - one search per distinct ready-time cap, of which
 #                             the household has two, and one use-it-up pass
@@ -94,9 +93,8 @@ WEIGHTS = {"pantry": 1.0, "buying": 0.5}
 # item ("Neither cadence is scheduled"), and it constrains the shopping
 # through shelf life as well, so a planner that half-honoured it would hand
 # back a week with four dinners nobody is home to cook. What the cadence
-# reaches into today is how long a dish may take, which is
-# settings.max_ready_minutes for the day it is cooked on, and that is read
-# below.
+# reaches into today is how long a dish may take: settings.max_ready_minutes
+# for the day it is cooked on, read below.
 
 
 @dataclass(frozen=True)
@@ -153,7 +151,7 @@ class Week:
 
     @property
     def empty(self):
-        """True when nothing was chosen at all, which is a week to say so about."""
+        """True when nothing was chosen at all."""
         return all(meal.recipe_id is None for meal in self.meals)
 
     @property
@@ -184,8 +182,7 @@ def next_monday(today=None):
 
     The planning run happens on a Saturday for a week that starts on Monday,
     so the default is the Monday ahead. A run on a Monday plans the day it is
-    standing on rather than a week away, which is what someone asking for a
-    plan on Monday morning means.
+    standing on rather than a week away.
     """
     today = _as_date(today or datetime.date.today())
     if today.weekday() == 0:
@@ -321,10 +318,10 @@ def skip(cx, meal_id, note=None):
 def close(cx, plan_id):
     """Close a period and purge its recipe pointers. Returns how many went.
 
-    This is the promise in docs/db.md kept as code rather than as prose: the
-    id was a pointer so the board could re-fetch a meal while the plan was
-    live, and the moment the plan is not live it is deleted. A closed week
-    shows what it consumed, not what it was called.
+    This is the promise in docs/db.md kept as code: the id was a pointer so
+    the board could re-fetch a meal while the plan was live, and the moment
+    the plan is not live it is deleted. A closed week shows what it consumed,
+    not what it was called.
     """
     with cx.transaction():
         purged = cx.execute(
@@ -366,13 +363,12 @@ def pairing(days, struck):
     dinner is always a cook: it is the meal the week is built around, and a
     dinner that were a portion of the night before would be the same dinner
     twice running. A lunch is the previous dinner's second portion where there
-    is one, and a batch of its own where there is not, which is the settled
-    decision in two lines.
+    is one, and a batch of its own where there is not.
 
     The edges of the week cannot pair and are not pretended to: the first
     lunch has no dinner before it inside the plan and the last dinner has no
     lunch after it, so each is cooked for one sitting. Replanning from a
-    partial week is what would know about last Sunday, and it is its own item.
+    partial week would know about last Sunday, and that is its own item.
     """
     kinds, eats, spare = {}, {}, {}
     for day in days:
@@ -415,18 +411,17 @@ def _assemble(cx, days, struck, kinds, eats, candidates, caps_by_day, servings, 
     urgency = _urgency(cx, today)
     most = max(caps_by_day[day] for (day, _), how in kinds.items() if how == COOK)
     # `summed` is not seeded with the term names on purpose: a term added
-    # later lands in it by being returned from `terms`, and nothing here has
-    # to be told about it.
+    # later lands in it by being returned from `terms`.
     chosen, taken, total, summed = {}, set(), 0.0, {}
     for key in sorted((cook for cook, how in kinds.items() if how == COOK),
                       key=lambda cook: (cook[0], SLOTS.index(cook[1]))):
         cap = caps_by_day[key[0]]
         fits = [each for each in candidates if _fits(each, cap, most)]
         fresh = [each for each in fits if each.recipe_id not in taken]
-        # A dish comes round again only when the pool is spent, because an
-        # empty Thursday is worse than a repeat and the cooldown that would
-        # rule on repeats reads the household's eating history, which is its
-        # own item (docs/db.md).
+        # A dish comes round again only when the pool is spent: an empty
+        # Thursday is worse than a repeat, and the cooldown that would rule on
+        # repeats reads the household's eating history - its own item
+        # (docs/db.md).
         fits = fresh or fits
         if not fits:
             continue
@@ -505,8 +500,8 @@ def _candidates(cx, client, caps, servings, today, pool):
     The first pass is complexSearch with what is in stock and fillIngredients
     on, once per distinct ready-time cap, because a search cannot filter two
     time limits at once and a Saturday afternoon is not a Tuesday evening. The
-    second is findByIngredients over what turns soonest, which is the call for
-    a week that has to use something up before it goes.
+    second is findByIngredients over what turns soonest, for a week that has
+    to use something up before it goes.
 
     `min_servings` is two sittings' worth: a dish that cannot yield that
     cannot be cooked once and eaten twice. Scaling a four-serving recipe down
@@ -672,8 +667,7 @@ def _results(payload):
     """The recipes out of an answer, whichever shape the call returns them in.
 
     Cut to PER_SEARCH on the way in rather than trusted to arrive that way:
-    `number` is a request and the ceiling above is a promise, and the promise
-    should not depend on the service keeping to what it was asked for.
+    `number` is a request and the ceiling above is a promise.
     """
     if isinstance(payload, list):
         return payload[:PER_SEARCH]

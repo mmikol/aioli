@@ -4,8 +4,7 @@ The usual move is to record a live response and replay it. The terms forbid
 exactly that - recipe data may not be held past the hour - and a fixture is a
 place data gets held for years (docs/db.md). So every recipe below is made up:
 the titles, the ingredients and the method are written here and belong to
-nobody. They are wrong in every particular except the one that matters, which
-is the shape.
+nobody. They are wrong in every particular except the shape.
 
 What keeps them honest is `shape_errors`, the comparator the unit tests use
 against these and the contract test uses against the live service. It reads
@@ -17,17 +16,17 @@ import json
 from urllib.error import HTTPError
 
 # Words that mark a fixture as ours. A response pasted in from the service
-# would carry none of them, which is what the test asserting them is for.
+# would carry none of them, and a test insists on them.
 SYNTHETIC_MARKERS = ("fictional", "notional", "invented", "imaginary", "pretend",
                      "make-believe")
 
 # The guard is closed by default: every string in a fixture is assumed to be a
 # recipe's own words unless its key is on the list below. An allow-list of
-# keys-that-must-be-invented was the first shape and it was the wrong one - it
-# passed over `summary` and `localizedName`, which the fixtures already carry
-# and which are the service's own prose, so a pasted live response would have
-# sailed through the one test standing between it and a public repo. A field
-# the service adds tomorrow now fails closed rather than slipping past unread.
+# keys-that-must-be-invented was the first shape and the wrong one: it passed
+# over `summary` and `localizedName`, the service's own prose, which the
+# fixtures already carry, so a pasted live response would have sailed through
+# the one test standing between it and a public repo. A field the service adds
+# tomorrow now fails closed rather than slipping past unread.
 #
 # What is exempt is vocabulary rather than authorship: an aisle, a unit, a
 # media type, a diet. "Skillet" is the word for a skillet, and a canned-goods
@@ -68,8 +67,8 @@ IMAGINARY_PARSLEY = _ingredient(
 MAKE_BELIEVE_RICE = _ingredient(
     10005, "make-believe rice", 1.5, "cups", "1 1/2 cups make-believe rice", "Pasta and Rice")
 
-# A complexSearch answer with fillIngredients on, which is the call the planner
-# makes: used, missed and unused are what it scores the pantry with.
+# A complexSearch answer with fillIngredients on - the call the planner makes.
+# Used, missed and unused are what it scores the pantry with.
 COMPLEX_SEARCH = {
     "results": [
         {
@@ -120,8 +119,8 @@ COMPLEX_SEARCH_WITH_NUTRITION = {
     "totalResults": 1,
 }
 
-# findByIngredients, the second pass. A bare list rather than an envelope,
-# which is the difference the client's point arithmetic has to know about.
+# findByIngredients, the second pass. A bare list rather than an envelope -
+# the difference the client's point arithmetic has to know about.
 FIND_BY_INGREDIENTS = [
     {
         "id": 9003,
@@ -271,9 +270,9 @@ def invented_text(value, exempt=TAXONOMY_KEYS, key=None):
     insists all of it is.
 
     Collected by default and exempted by name, so a field nobody thought about
-    is caught rather than missed. A string reached through a list carries the
-    key the list hung from, since an `instructions` expressed as a list of
-    steps is as much the service's prose as one expressed as a paragraph.
+    is caught. A string reached through a list carries the key the list hung
+    from, since an `instructions` expressed as a list of steps is as much the
+    service's prose as one expressed as a paragraph.
     """
     found = []
     if isinstance(value, dict):

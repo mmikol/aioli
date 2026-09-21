@@ -16,8 +16,7 @@ page making the same writes in its own words is how the two would drift.
 Why the list is asked for rather than always shown. Building it looks a dish
 up per cook, and a page that spent quota on every reload would spend a day's
 points on a phone left open on a counter (pm/backlog.md). So the week costs
-nothing to look at and says plainly what asking will cost, and the list is
-made when somebody asks for it.
+nothing to look at and says plainly what asking will cost.
 
 Nothing the service authored is stored by either view. What is shown is the
 household's own: the plan's dates and slots, the pantry's names, and - where
@@ -30,14 +29,13 @@ import datetime
 from board.pages import _h, _nav, _one, _problem, _said, _state, shell
 from planner import groceries, week
 
-# The board's own helpers, above, are imported rather than written again on
-# purpose. One escape function, one shell, one way a date is spoken: a second
-# set of them is two boards inside a fortnight, and the first thing to go
-# would be the escaping, which is the one that matters.
+# The board's own helpers, above, are imported, not written again. One escape
+# function, one shell, one way a date is spoken: a second set of them is two
+# boards inside a fortnight, and the first thing to go would be the escaping.
 
 # Where the list is reached from. It is not in board/pages.py's NAV because
-# the nav is the four views a phone taps between and this is the week's own
-# list, reached from the week it belongs to.
+# the nav is the four views a phone taps between, and this is the week's own
+# list.
 LIST = "/groceries"
 WEEK = "/"
 
@@ -50,6 +48,11 @@ NOTHING = "nothing planned"
 # the line that is bought for one meal only. It is the same warning - a thing
 # nothing else in the week will finish is a thing heading for the bin.
 ALONE = "for one meal only"
+
+# How many days the table will walk, whatever a plan row says. A period is a
+# week and the loop below is over dates rather than rows, so this stops a
+# mistyped `ends_on` from turning one page into a year of empty days.
+MOST_DAYS = 31
 
 Showing = collections.namedtuple("Showing", "plan meals")
 
@@ -70,7 +73,7 @@ def week_page(cx, query=None, problem=None, today=None):
 
 
 def groceries_page(cx, query=None, problem=None, today=None):
-    """The list on its own, which is the page that goes to the shop.
+    """The list on its own: the page that goes to the shop.
 
     The week is one tap away rather than repeated above it: a list read in an
     aisle wants the whole screen, and the days are no use standing in front of
@@ -94,10 +97,10 @@ def groceries_page(cx, query=None, problem=None, today=None):
 def _showing(cx, query, today):
     """The week the board shows: the one in force, then the one coming.
 
-    A plan can be asked for by id, which is what a link from a mail will carry.
-    Otherwise it is this period's live week, then whatever was last planned for
-    this period, then the same two for the week ahead - which is what a
-    Saturday evening wants, the planning run having just made next week.
+    A plan can be asked for by id: a link from a mail carries one. Otherwise it
+    is this period's live week, then whatever was last planned for this period,
+    then the same two for the week ahead - what a Saturday evening wants, the
+    planning run having just made next week.
     """
     if not _migrated(cx):
         return None
@@ -154,28 +157,41 @@ def _table(showing, today):
     A table rather than fourteen rows because the question asked of this page
     is what is happening on Thursday, and a column of dinners answers it at a
     glance where a list makes it a scroll.
+
+    The days come from the period and not from the rows. The planner writes a
+    row for every slot, empty ones included, but a week rendered only from
+    what is in the table would hide the one failure worth seeing - a day that
+    lost its rows - behind a page that looks perfectly reasonable.
     """
     by_id = {meal["id"]: meal for meal in showing.meals}
     by_day = {}
     for meal in showing.meals:
         by_day.setdefault(meal["meal_on"], {})[meal["slot"]] = meal
     rows = []
-    for day in sorted(by_day):
+    for day in sorted(set(_days(showing.plan)) | set(by_day)):
+        slots = by_day.get(day, {})
         when, behind = _said(day, today)
         rows.append("<tr><td>%s<span class='quiet'> - %s</span></td>%s%s</tr>" % (
             _h(when), _h(behind),
-            _cell(by_day[day].get("lunch"), by_id),
-            _cell(by_day[day].get("dinner"), by_id)))
+            _cell(slots.get("lunch"), by_id), _cell(slots.get("dinner"), by_id)))
     return ("<table><tr><th>day</th><th>lunch</th><th>dinner</th></tr>%s</table>"
             % "".join(rows))
+
+
+def _days(plan):
+    """The days the period covers, first to last."""
+    days, day = [], plan["starts_on"]
+    while day <= plan["ends_on"] and len(days) < MOST_DAYS:
+        days.append(day)
+        day += datetime.timedelta(days=1)
+    return days
 
 
 def _cell(meal, by_id):
     """One slot, in the words the plan itself uses.
 
-    The recipe pointer is not rendered. It is a pointer and not a dish, and
-    the only thing it is for is fetching the method at the stove, which is the
-    item after this one (docs/db.md).
+    The recipe pointer is not rendered. The only thing it is for is fetching
+    the method at the stove, the item after this one (docs/db.md).
     """
     if meal is None:
         return "<td class='quiet'>%s</td>" % _h(NOTHING)
@@ -199,12 +215,12 @@ def _from(meal, by_id):
 
 
 def _marks(meal):
-    """Whether this one has been answered for, which the confirmations set."""
+    """Whether this one has been answered for: the confirmations set it."""
     return "<span class='quiet'> - cooked</span>" if meal["cooked_at"] else ""
 
 
 def _note(meal):
-    """The plan's own note on a slot, which is usually why it is the way it is."""
+    """The plan's own note on a slot: usually why it is the way it is."""
     return "<span class='quiet'> - %s</span>" % _h(meal["note"]) if meal["note"] else ""
 
 
@@ -224,8 +240,8 @@ def _beside(cx, showing, asked):
         return ("<h2>the list</h2><p class='quiet'>there is no dish left to shop for"
                 " on this week.</p>")
     return ("<h2>the list</h2>"
-            "<p class='quiet'>the list looks up each dish, which is %d %s of the day's"
-            " points, so it is made when you ask for it.</p>"
+            "<p class='quiet'>the list looks up each dish - %d %s against the day's"
+            " points - so it is made when you ask for it.</p>"
             "<p><a class='button' href='%s'>make the list</a></p>"
             % (len(dishes), "lookup" if len(dishes) == 1 else "lookups",
                _h("%s?list=1" % WEEK)))
@@ -257,6 +273,11 @@ def _summary(shopping):
     said = ["<h2>the list</h2>"]
     if shopping.note:
         said.append("<p class='quiet'>%s</p>" % _h(shopping.note))
+    if not shopping.dishes:
+        # Nothing was looked up, so nothing is known. An empty list and a list
+        # that could not be built look identical on a phone and mean opposite
+        # things, so only one of them gets to say the house has everything.
+        return "".join(said)
     if shopping.empty:
         said.append("<p class='quiet'>nothing to buy: the week is cooked"
                     " from what is already in the house.</p>")
@@ -284,30 +305,35 @@ def _line(line):
     A line no other meal wants is marked in the colour the board keeps for
     something about to turn, because that is what it is: bought whole, used
     once, and left to go off unless somebody cooks it again.
+
+    The amount goes in the state and everything else in the name. The
+    stylesheet holds the state on one line, which is right for "400 g" and
+    wrong for a sentence, so a sentence goes where the column wraps.
     """
-    wanted = "%d meals" % len(line.meals) if line.shared else ALONE
-    state = " - ".join(part for part in (line.said, wanted) if part)
-    return ("<div class='row'><span class='name'>%s</span>%s</div>"
-            % (_h(line.name), _state(state, marked=not line.shared)))
+    wanted = ("<span class='quiet'> - %d meals</span>" % len(line.meals) if line.shared
+              else "<span class='soon'> - %s</span>" % _h(ALONE))
+    return ("<div class='row'><span class='name'>%s%s</span>%s</div>"
+            % (_h(line.name), wanted, _state(line.said)))
 
 
 def _questions(shopping):
     """What nobody has said either way, as questions rather than assumptions.
 
     Each one is a wording that resembles something on the shelf without
-    anybody having confirmed they are the same thing. Answering it is
-    correcting the pantry's own name for the thing, which is the pantry page's
-    job; a form here would be a second place that writes an alias, and the one
-    that writes them is the matching layer's (matching/ingredients.py).
+    anybody having confirmed they are the same thing. Answering it means
+    correcting the pantry's own name for the thing, on the pantry page; a form
+    here would be a second place that writes an alias, and the one that writes
+    them is the matching layer's (matching/ingredients.py).
     """
     said = ["<h2>what nobody has said</h2>",
-            "<p class='quiet'>these are on the list until somebody says what they are."
-            " Naming the thing the way the recipe does, on"
-            " <a href='/pantry'>the pantry</a>, is the answer.</p>"]
+            "<p class='quiet'>these stay questions until somebody answers them -"
+            " naming the thing on <a href='/pantry'>the pantry</a> the way the recipe"
+            " does is the answer.</p>"]
     for line in shopping.ask:
-        state = " - ".join(part for part in (line.said, line.reason) if part)
-        said.append("<div class='row'><span class='name needs-answer'>%s</span>%s</div>"
-                    % (_h(line.name), _state(state, marked=True)))
+        said.append(
+            "<div class='row'><span class='name needs-answer'>%s"
+            "<span class='quiet'> - %s</span></span>%s</div>"
+            % (_h(line.name), _h(line.reason), _state(line.said, marked=True)))
     return "".join(said)
 
 
@@ -315,8 +341,8 @@ def _already(shopping):
     """What the house already holds, folded away.
 
     Worth showing and not worth scrolling past: this is the week built from
-    the pantry outward, which is the promise the planner makes, and a list
-    that never said so would look like a week planned from nothing.
+    the pantry outward - the promise the planner makes - and a list that never
+    said so would look like a week planned from nothing.
     """
     lines = "".join(
         "<div class='row'><span class='name'>%s</span>%s</div>"

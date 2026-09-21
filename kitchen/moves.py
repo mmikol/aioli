@@ -33,9 +33,9 @@ def record(cx, reason, ingredient, quantity=None, unit=None, level=None,
     """Write a move and apply it, both or neither.
 
     The five reasons are what can happen to stock: 'bought' puts it in,
-    'cooked' takes some out, 'finished' and 'discarded' say it is gone - the
-    difference between them being whether it was eaten, which is the waste
-    figure - and 'corrected' is the person overruling the arithmetic.
+    'cooked' takes some out, 'finished' and 'discarded' say it is gone -
+    whether it was eaten is the waste figure - and 'corrected' is the person
+    overruling the arithmetic.
 
     `cause` names what asked for this move, and naming it makes the move
     at-most-once: see `_claim`. Returns the stock_move row, or None when the
@@ -105,9 +105,9 @@ def cook(cx, ingredients, eaten_on=None, slot="dinner", method=None, note=None, 
 
     The history is what the variety cooldown reads later. Not "do not repeat
     recipe 4821" but "there has been chicken thigh three times this month",
-    which is the household's own record and keeps indefinitely, while the
-    recipe is not ours to keep (docs/db.md). So the ingredient and the method
-    are written and the recipe is not.
+    which is the household's own record and keeps indefinitely. The recipe is
+    not ours to keep (docs/db.md), so the ingredient and the method are
+    written and the recipe is not.
 
     The whole meal is one claim under `cause`, so a retry that died half way
     through does not half-cook it. Returns the moves and the history rows, or
@@ -150,7 +150,7 @@ def recent(cx, limit=50, ingredient=None):
 
 
 def caused_by(cx, cause):
-    """Every move a cause has already made, which is what makes a retry safe."""
+    """Every move a cause has already made: what makes a retry safe."""
     return cx.execute(
         "select * from stock_move where split_part(note, %s, 1) = %s order by id",
         (SEPARATOR, TAG + cause)).fetchall()
@@ -160,8 +160,8 @@ def _apply(cx, reason, ingredient, quantity, unit, level, shelf_life_days, acqui
     """Move the balance the way this reason moves it.
 
     'discarded' with a quantity is a part of a thing binned and the rest kept;
-    without one it is the whole thing, which is the common case - a bag of
-    salad does not go off by the handful.
+    without one it is the whole thing, the common case - a bag of salad does
+    not go off by the handful.
     """
     if reason == "bought":
         return pantry.restock(cx, ingredient, quantity=quantity, unit=unit,
@@ -175,7 +175,7 @@ def _apply(cx, reason, ingredient, quantity, unit, level, shelf_life_days, acqui
             return pantry.empty(cx, ingredient)
         return pantry.subtract(cx, ingredient, quantity=quantity, unit=unit)
     # A correction about a thing that was never written down is a thing being
-    # written down, which is how the pantry fills as the board is used.
+    # written down. That is how the pantry fills as the board is used.
     row = pantry.correct(cx, ingredient, quantity=quantity, unit=unit, level=level)
     if row is None:
         row = pantry.restock(cx, ingredient, quantity=quantity, unit=unit,

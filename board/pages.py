@@ -8,7 +8,7 @@ exactly the kitchen that does not exist three weeks later (pm/backlog.md).
 A view is a plain function of a connection and a parsed query that returns a
 whole document. Nothing here opens a connection, commits one, or knows what a
 socket is: board/serve.py wires the routes at the foot of this file, and the
-caller owns the transaction, which is what lets the suite render every page
+caller owns the transaction. That is what lets the suite render every page
 inside a transaction it throws away.
 
 Three habits, stated once so no view has to repeat them.
@@ -17,18 +17,18 @@ Everything that reaches HTML goes through `_h`. A pantry holds whatever
 someone typed into it, and an ingredient called `<script>` is a thing a person
 is entitled to write down.
 
-Every write is made at most once whatever the network does, which is what
-kitchen/moves.py takes a `cause` for. A thumb that lands twice on a phone,
-and a browser re-posting on a refresh, both arrive under a cause already
-claimed and move the stock once. That is also why these handlers answer with
-the page rather than a redirect: the usual reason to redirect after a post is
-the double submit, and it is already answered. A pantry edit carries a cause
-minted per form, because correcting the same ingredient twice is two real
-edits and only the same form sent twice is one; a confirmation carries none,
-because planner/week.py keys a meal on itself and a meal is cooked once.
+kitchen/moves.py takes a `cause` so every write is made at most once whatever
+the network does. A thumb that lands twice on a phone, and a browser
+re-posting on a refresh, both arrive under a cause already claimed and move
+the stock once. That is also why these handlers answer with the page instead
+of a redirect: the usual reason to redirect after a post is the double
+submit, and it is already answered. A pantry edit carries a cause minted per
+form, because correcting the same ingredient twice is two real edits and only
+the same form sent twice is one; a confirmation carries none, because
+planner/week.py keys a meal on itself and a meal is cooked once.
 
-Nothing Spoonacular authored is rendered here, which on these three pages is
-easy: the pantry, the settings and the household's own answers are all the
+Nothing Spoonacular authored is rendered here, and on these three pages that
+is easy: the pantry, the settings and the household's own answers are all the
 household's (docs/db.md). The confirmation view reads a plan row's date and
 slot and never its recipe pointer.
 """
@@ -52,8 +52,8 @@ BEHIND_DAYS = 14
 
 # A confirmation list is answered standing up, with one thumb: a list that
 # scrolls is a list that gets the wrong row tapped. It is also the ceiling on
-# what this view will ever hold in memory, which on a 16 GB host is a figure
-# worth having rather than a query that returns whatever the plan holds.
+# what this view will ever hold in memory, and on a 16 GB host a ceiling beats
+# a query that returns whatever the plan holds.
 AWAITING = 20
 
 # The pages, so each one can link to the others. The board is read on a phone
@@ -93,16 +93,16 @@ def _h(value):
 def _one(query, name, default=""):
     """One value out of a parse_qs mapping, stripped.
 
-    parse_qs drops a blank field rather than handing back an empty string, so
-    an absent key and an emptied box arrive the same way, which is right:
-    here they mean the same thing.
+    parse_qs drops a blank field instead of handing back an empty string, so
+    an absent key and an emptied box arrive the same way. Here they mean the
+    same thing.
     """
     values = query.get(name) or ()
     return values[0].strip() if values else default
 
 
 def _many(query, name):
-    """Every value under one name, which is what a row of checkboxes sends."""
+    """Every value under one name: what a row of checkboxes sends."""
     return [value.strip() for value in query.get(name) or () if value.strip()]
 
 
@@ -126,7 +126,7 @@ def _measure(text, what):
 
 
 def _figure(value):
-    """A stored quantity as a person would write it: 2, and not 2.000."""
+    """A stored quantity as a person would write it: 2, not 2.000."""
     if value is None:
         return ""
     text = format(value, "f")
@@ -178,7 +178,7 @@ def _state(text, marked=False):
     The marked word is a span inside the state rather than a second class on
     it: `.row .state` is the more specific rule and would win, so `soon` on
     the same element would silently do nothing. This keeps the distinction
-    inside the vocabulary board.css already has and restyles nothing.
+    inside the vocabulary board.css already has.
     """
     said = _h(text)
     return "<span class='state'>%s</span>" % (
@@ -298,7 +298,7 @@ def _perishable_row(row, count, today, soon):
 
 
 def _staple_row(row, count):
-    """A staple: in stock or running low, and nothing more precise than that.
+    """A staple: in stock or running low.
 
     Nobody weighs their rice, and a pantry that asks them to is a pantry
     abandoned inside a fortnight (pm/backlog.md).
@@ -486,8 +486,8 @@ def _origin(cx, key):
 def _number_row(cx, key, what, least):
     """One figure, its box and its source.
 
-    The hidden `fields` input is what tells the handler this form carried the
-    key at all: an untouched key and an emptied box are the same absence in a
+    The hidden `fields` input tells the handler this form carried the key at
+    all: an untouched key and an emptied box are the same absence in a
     posted form, and writing the difference away would be the board quietly
     changing a setting nobody looked at.
     """
@@ -558,10 +558,10 @@ def _rules(cx):
 def _kitchen(cx):
     """What the kitchen has.
 
-    Absent and unlisted are not the same thing and the two buttons say so: a
-    row reading `not here` is the household stating it does not own the thing,
-    which is what drops a recipe, while forgetting the row says nothing either
-    way and lets every recipe through again (kitchen/settings.py).
+    Absent and unlisted are not the same thing and the two buttons say so. A
+    row reading `not here` drops a recipe: it is the household stating it does
+    not own the thing. Forgetting the row says nothing either way and lets
+    every recipe through again (kitchen/settings.py).
     """
     rows = []
     for kit in settings.equipment(cx):
@@ -582,7 +582,7 @@ def _kitchen(cx):
                "say it is gone" if kit["present"] else "say it is here"))
     return ("<h2>the kitchen</h2>"
             + ("".join(rows) or "<p class='quiet'>nothing is written down, "
-                                "which lets every recipe through.</p>")
+                                "so every recipe gets through.</p>")
             + "<form method='post' action='/settings'><div class='row'>"
               "<input type='hidden' name='do' value='set-equipment'>"
               "<input type='hidden' name='present' value='yes'>"
@@ -624,8 +624,8 @@ def _save(cx, query):
 
     Saving every box would turn every default into a typed figure the first
     time anyone pressed save, and the board would lose the one thing the
-    source column is for - being able to say which figures the household has
-    actually decided.
+    source column is for - saying which figures the household has actually
+    decided.
 
     Everything is read and checked before anything is written: half a saved
     form is worse than a rejected one, because nothing says which half.
@@ -685,11 +685,10 @@ def awaiting(cx, today=None):
     The standing assumption is that an unconfirmed meal did not happen
     (pm/backlog.md), so what is asked about is what is already behind: today
     and the fortnight before it. Thursday is not a question on Tuesday, and a
-    meal from last month is not a question at all - the answer would be a
-    guess, and it would be written into the ledger as a fact.
+    meal from last month is not a question at all: the answer would be a guess.
 
-    A slot with no kind is a slot nothing fills, which is a row worth showing
-    on the week and not a question with a true answer, so it is not asked
+    A slot with no kind is a slot nothing fills. It is worth showing on the
+    week, but it is not a question with a true answer, so it is not asked
     about. Lunch comes before dinner, as it does in the plan's own reading.
     """
     today = today or datetime.date.today()
@@ -731,9 +730,9 @@ def confirm_page(cx, query=None, problem=None, today=None):
 def _meal_row(meal, today):
     """One meal, one question, two answers.
 
-    A portion of an earlier cook is asked whether it was eaten and not
-    whether it was cooked, because it was cooked on another day and the
-    question would be about the wrong evening.
+    A portion of an earlier cook is asked whether it was eaten, not whether it
+    was cooked, because it was cooked on another day and the question would be
+    about the wrong evening.
 
     There is no cause in this form. Everywhere else on the board one is minted
     per render, because correcting the same ingredient twice is two real
@@ -771,7 +770,7 @@ def confirm_answer(cx, query):
     No ingredients go with the confirmation: a meal's ingredients are the
     recipe's words, which are not ours to keep (docs/db.md), so the board has
     no list of its own to subtract. They are passed by whoever is holding the
-    method it fetched at the stove, which is the backlog item after this one.
+    method it fetched at the stove - the backlog item after this one.
     """
     try:
         said = _one(query, "answer")

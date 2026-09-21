@@ -1,12 +1,11 @@
 -- The week: what a run decided the household would eat, and what it did.
 --
 -- This is the one place a recipe id is written down, and it is written as an
--- integer and nothing else. No title, no description, no instructions, no
--- image, no ingredient text: a pointer so the board can re-fetch a meal while
--- the plan is live, purged the moment the period closes (docs/db.md). If a
--- column holding the service's words ever appears beside `recipe_id`, the
--- line has been crossed and the answer is to delete the column, not to argue
--- about it.
+-- integer and nothing else. No title, no instructions, no ingredient text: a
+-- pointer so the board can re-fetch a meal while the plan is live, purged the
+-- moment the period closes (docs/db.md). If a column holding the service's
+-- words ever appears beside `recipe_id`, the line has been crossed and the
+-- answer is to delete the column, not to argue about it.
 
 -- A period, its state, and the run that produced it.
 --
@@ -16,9 +15,9 @@
 -- week with its pointers purged, which shows what it consumed rather than
 -- what it was called. 'unfilled' is the one that earns its place: a week the
 -- planner could not fill, because there is no key, the day's points are gone
--- or nothing came back this kitchen can cook. It is kept rather than
--- discarded, since a week that says plainly it could not be planned is worth
--- more to the person reading the board than a missing row.
+-- or nothing came back this kitchen can cook. It is kept, since a week that
+-- says plainly it could not be planned is worth more to the person reading
+-- the board than a missing row.
 create table plan (
     id          integer primary key generated always as identity,
     period      text not null,
@@ -51,13 +50,13 @@ create index plan_by_period on plan (period, created_at desc);
 -- nothing for that evening, or what it would have eaten was skipped - and it
 -- is still a row, so the board shows an empty Tuesday rather than no Tuesday.
 --
--- `servings` is what this sitting puts on the table, which is the household
--- size. The batch is therefore the cook's servings plus those of the portion
--- that follows it, and that sum is the whole of "cooked once, eaten twice".
+-- `servings` is what this sitting puts on the table: the household size. The
+-- batch is therefore the cook's servings plus those of the portion that
+-- follows it, and that sum is the whole of "cooked once, eaten twice".
 --
 -- `cooked_at` is only the plan's own note that the meal happened. The stock
--- it moved is in `stock_move` under the cause 'plan_meal:<id>', which is what
--- makes a confirmation arriving twice harmless (kitchen/moves.py).
+-- it moved is in `stock_move` under the cause 'plan_meal:<id>', which makes
+-- a confirmation arriving twice harmless (kitchen/moves.py).
 create table plan_meal (
     id          integer primary key generated always as identity,
     plan_id     integer not null references plan (id) on delete cascade,
@@ -76,14 +75,13 @@ create table plan_meal (
         kind <> 'leftovers' or pairs_with is not null),
     -- The pointer sits on the cook and nowhere else, because the cook is the
     -- dish that was looked up. A portion of it follows `pairs_with` to the
-    -- same id rather than keeping a second copy, which is one fewer place a
+    -- same id instead of keeping a second copy, which is one fewer place a
     -- purge has to reach. `is not distinct from` rather than `=` because a
     -- check that comes out null is a check that passed, and a pointer on a
     -- row with no kind at all went straight through the obvious spelling.
     constraint only_a_cook_points_at_a_recipe check (
         recipe_id is null or kind is not distinct from 'cook'),
-    -- A skipped meal is left empty, which is the whole of what skipping
-    -- means: no dish, no pairing, nobody served.
+    -- A skipped meal is left empty: no dish, no pairing, nobody served.
     constraint a_skipped_meal_is_empty check (
         not skipped or (kind is null and recipe_id is null
                         and pairs_with is null and servings = 0)),

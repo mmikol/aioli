@@ -4,9 +4,9 @@ AIoli stores one thing: the household's own record. What is owned, what was
 consumed, what was paid, what was judged. Recipes are not stored. They are
 fetched when needed, shown, and dropped.
 
-That is the API's terms and it is also the better design, because it settles
-what belongs here without arguing each table: if a column would hold
-something Spoonacular wrote, it does not exist.
+That is the API's terms, and the better design besides: it settles what
+belongs here without arguing each table. If a column would hold something
+Spoonacular wrote, it does not exist.
 
 ## The line
 
@@ -17,7 +17,7 @@ not in a log line, not in a sent mail's archive.
 
 **Stored freely.** What the household owns and does. The pantry. The prices
 paid. The meals cooked, skipped and finished. The money spent. What reheats
-badly. None of it came from the API; all of it is the user's.
+badly. None of it came from the API.
 
 **The single exception, and its limits.** A plan's rows carry a recipe id so
 the board can re-fetch a meal while that plan is live. It is a pointer, not
@@ -38,10 +38,9 @@ catches the thing actually being avoided - the same dinner wearing a
 different name.
 
 **Keeps-well** is not a verdict filed against a recipe; it is a rule over
-what a dish is made of and how it was cooked. Fried holds badly, a leafy
-salad holds badly, a braise holds well. Stated over ingredients and method
-it applies to a recipe never seen before, which a per-recipe verdict never
-could.
+what a dish is made of and how it was cooked. Fried holds badly, a braise
+holds well. Stated over ingredients and method, it applies to a recipe
+never seen before.
 
 ## The tables
 
@@ -56,7 +55,7 @@ could.
 | `budget_period` | the envelope for a month, what has been spent against it, what rolls forward |
 | `plan` | a period, its state, and the run that produced it |
 | `plan_meal` | a date, a slot, servings, the pairing, whether it was skipped or cooked, and the live recipe pointer |
-| `eating_history` | what was actually eaten, by ingredient and method, which is what variety reads |
+| `eating_history` | what was actually eaten, by ingredient and method - what variety reads |
 | `keeps_well` | the rules over ingredient and method, and the corrections made when a pairing went badly |
 | `grocery_line` | what to buy, at which store, in which pack, for which plan |
 | `event` | cook sessions and shop trips: when, how long, which `.ics` |
@@ -72,4 +71,4 @@ A closed week cannot show what it was called without asking the API again,
 and after the pointer is purged it cannot show it at all. A plan from March
 is a record of what was eaten and spent, not a menu to look back over. That
 is the trade, and it is the right way round: the pantry, the prices and the
-history are the things worth keeping, and they are all ours to keep.
+history are ours to keep.

@@ -6,22 +6,21 @@ sit in a table waiting for Tuesday evening - they are fetched at the moment
 somebody opens a meal to cook it, shown, and dropped (docs/db.md).
 
 What the terms do allow is an hour, and an hour is what a person at a stove
-happens to want: the page is reloaded, a phone locks and is woken, a thumb
-lands on the back button, and none of that should spend a point or wait on
-the network. So this module is one call to `information` with a small hold in
-front of it. The hold is memory and nothing else - no table, no file, no log
-line - and it is bounded twice, by age and by count, because a dict keyed by
-recipe id with nothing taking from it grows for as long as the process lives
-and the host is a 16 GB machine running PostgreSQL beside it.
+happens to want: the page is reloaded, a phone locks and is woken, and none
+of that should spend a point or wait on the network. So this module is one
+call to `information` with a small hold in front of it. The hold is memory and
+nothing else - no table, no file, no log line - and it is bounded twice, by age
+and by count, because a dict keyed by recipe id with nothing taking from it
+grows for as long as the process lives and the host is a 16 GB machine running
+PostgreSQL beside it.
 
 Failing here costs more trust than failing anywhere else, and that is the
 reason this module has the shape it does. Every other failure in this system
-happens to a machine on a Saturday morning: a plan is late, a mail is thin,
-somebody notices on Monday. This one happens to a person standing in a
-kitchen with the pan already hot, and it is the one moment the whole system
-is being used in earnest. So there is no exception to catch and no blank
-card. A method that did not land comes back with `ok` false, one word saying
-what went wrong and a sentence in plain words for the board to print.
+happens to a machine on a Saturday morning: a plan is late, somebody notices
+on Monday. This one happens to a person standing in a kitchen with the pan
+already hot. So there is no exception to catch and no blank card. A method that
+did not land comes back with `ok` false, one word saying what went wrong and a
+sentence in plain words for the board to print.
 """
 import html
 import re
@@ -33,18 +32,17 @@ from dataclasses import dataclass, replace
 from matching.ingredients import RecipeIngredient
 from recipes.client import MissingKey, QuotaExhausted, Spoonacular, SpoonacularError
 
-# The terms cap a cache at an hour, so an hour is a ceiling and not a target.
-# It is enforced rather than configured: a caller may ask for less and the
-# constructor quietly refuses more, because the one number in this file that
-# is somebody else's rule should not be reachable by a keyword argument.
+# The terms cap a cache at an hour, so an hour is the ceiling. It is enforced
+# rather than configured: a caller may ask for less and the constructor quietly
+# refuses more, because the one number in this file that is somebody else's
+# rule should not be reachable by a keyword argument.
 HOLD_SECONDS = 3600
 
 # Thirty-two methods at once. A week is fourteen meals, so this is two weeks
-# of opened ones and already more than anybody cooks from at a time; a held
-# method is a few kilobytes of text, which makes a full hold tens of
-# kilobytes. The number matters less than the fact that there is one - an
-# unbounded dict keyed by recipe id is a leak on a host that is also running
-# a database, and the eviction below is what keeps it from being one.
+# of opened ones; a held method is a few kilobytes of text, which makes a full
+# hold tens of kilobytes. The number matters less than the fact that there is
+# one: an unbounded dict keyed by recipe id is a leak on a host that is also
+# running a database.
 HELD_AT_MOST = 32
 
 _TAG = re.compile(r"<[^>]+>")
@@ -58,8 +56,8 @@ class Step:
 
     `part` is the heading the service groups a run of steps under - the
     sauce, the finish - and is empty where there is only one list. It is
-    carried because dropping it runs two sub-recipes together into a single
-    sequence that reads as one pan.
+    carried because dropping it runs two sub-recipes together into what reads
+    as one pan.
     """
     number: int
     text: str
@@ -73,7 +71,7 @@ class Method:
 
     One type rather than a value-or-exception, for the reason
     `matching.units.Converted` is one: a service that cannot be reached is an
-    ordinary outcome here, and the board renders it rather than handles it.
+    ordinary outcome here, and the board renders it instead of handling it.
     `ok` says the fetch landed. `trouble` is the one word a caller branches
     on - quota, unreachable, refused, no key, no steps - and `sentence` is
     the plain words a person reads in place of the card.
@@ -84,8 +82,8 @@ class Method:
 
     Frozen, and made of tuples, so a caller handed a held method cannot edit
     what the next reload will see. Nothing in it is written down: it is the
-    service's text, it lives in this process for at most an hour, and it goes
-    no further (docs/db.md).
+    service's text, and it lives in this process for at most an hour
+    (docs/db.md).
     """
     recipe_id: int
     ok: bool = False
@@ -111,7 +109,7 @@ class Stove:
     `chef` is a `recipes.client.Spoonacular`. Left out, one is built from the
     environment at the first fetch rather than at construction, so a board
     with no key still starts and still shows the week - only the steps are
-    missing, and that is a sentence rather than a failure to boot.
+    missing.
 
     `clock` returns seconds and has to be monotonic. The default is
     `time.monotonic` and not `time.time` because a wall clock steps - NTP
@@ -142,8 +140,8 @@ class Stove:
             self._sweep()
             found = self._kept.get(key)
             if found is not None:
-                # Asking again is what says which meal is being cooked, so
-                # the one asked for is the last to be pushed out.
+                # Asking again says which meal is being cooked, so the one
+                # asked for is the last to be pushed out.
                 self._kept.move_to_end(key)
                 return found[1]
             answer = self._fetch(key)
@@ -277,8 +275,7 @@ def _prose(raw) -> tuple[str, ...]:
 
     The service sends `instructions` as HTML about as often as plain text, so
     the tags come out and the list items are where it breaks. It is a
-    fallback and not a parser: what it cannot split it hands over whole,
-    which reads better than nothing at all.
+    fallback and not a parser: what it cannot split it hands over whole.
     """
     if not isinstance(raw, str):
         return ()
@@ -289,9 +286,9 @@ def _prose(raw) -> tuple[str, ...]:
 def _lines(payload) -> tuple[RecipeIngredient, ...]:
     """The ingredient list, in the shape `matching.ingredients.cover` takes.
 
-    `original` is the line as the recipe writes it, which is both what a
-    person reads off a card and what `normalise_name` strips the amount off
-    anyway, so one wording serves the stove and the cupboard alike.
+    `original` is the line as the recipe writes it: what a person reads off a
+    card, and what `normalise_name` strips the amount off anyway. One wording
+    serves the stove and the cupboard alike.
     """
     found = []
     for item in payload.get("extendedIngredients") or ():
@@ -309,8 +306,8 @@ def _names(items) -> tuple[str, ...]:
     """The equipment one step calls for, in order and without repeats.
 
     An equipment name is the kitchen's vocabulary rather than the recipe's -
-    a skillet is the word for a skillet - which is why it may be read out
-    here and why it feeds `kitchen.settings.missing_equipment` unchanged.
+    a skillet is the word for a skillet - so it may be read out here, and it
+    feeds `kitchen.settings.missing_equipment` unchanged.
     """
     found = []
     for item in items or ():

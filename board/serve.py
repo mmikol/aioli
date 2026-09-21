@@ -29,8 +29,8 @@ STATIC_FILES = {
 def health():
     """What the container's healthcheck asks: is the schema where we left it.
 
-    A migration still pending means the image and the database disagree,
-    which is a failure even though every query would still answer.
+    A migration still pending means the image and the database disagree. That
+    is a failure even though every query would still answer.
     """
     with psql.connect() as cx:
         outstanding = [path.name for _, path in psql.pending(cx)]
@@ -99,7 +99,7 @@ def page():
             "<link rel='stylesheet' href='/static/board.css'>"
             "<title>AIoli</title>"
             "<main><h1>AIoli</h1>"
-            "<p class='quiet'>The kitchen is wired; the week is not planned yet.</p>"
+            "<p class='quiet'>the kitchen is wired; the week is not planned yet.</p>"
             "</main>")
 
 

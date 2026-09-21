@@ -18,8 +18,8 @@ VOLUME = "volume"
 COUNT = "count"
 
 # Each unit's dimension and what one of it is worth in that dimension's base
-# unit - g for mass, ml for volume. A count unit has no factor at all: an egg
-# and a clove are both counted and neither is worth any number of the other.
+# unit - g for mass, ml for volume. A count unit has no factor: an egg and a
+# clove are both counted, and neither is worth any number of the other.
 _BASE: dict[str, tuple[str, float | None]] = {
     "mg": (MASS, 0.001),
     "g": (MASS, 1.0),
@@ -145,8 +145,8 @@ class Converted:
 def normalise_unit(word: str | None) -> str | None:
     """The canonical spelling of a unit, or None when it is not a unit.
 
-    An absent unit is a count, because a recipe that says "2 eggs" gives no
-    unit for the reason that the egg is the unit.
+    An absent unit is a count: a recipe that says "2 eggs" gives no unit
+    because the egg is the unit.
     """
     if word is None:
         return "piece"
@@ -178,7 +178,7 @@ def parse_quantity(text: object) -> float | None:
     if isinstance(text, int | float):
         return float(text)
     # Read a vulgar fraction through unicodedata rather than writing one in a
-    # table here, which keeps this file ASCII as the house style asks.
+    # table here, keeping this file ASCII as the house style asks.
     expanded = []
     for character in str(text):
         value = unicodedata.numeric(character, None)
@@ -274,12 +274,11 @@ def convert(quantity: float | None, from_unit: str | None, to_unit: str | None, 
     if factor is None:
         # A volume becomes a mass only through a density, and a density is a
         # fact about the ingredient: a cup of flour is about 120 g, a cup of
-        # water 237 g, a cup of honey 340 g. Guessing one of those puts a
-        # wrong number into a subtraction nothing downstream can question -
-        # the pantry silently runs out, or silently never does, and the week
-        # is planned against a kitchen that does not exist. A refusal is
-        # visible: it becomes a question on the board, and a question that
-        # gets answered once is a row in `unit_conversion` for good.
+        # honey 340 g. Guessing one of those puts a wrong number into a
+        # subtraction nothing downstream can question - the pantry silently
+        # runs out, or silently never does. A refusal is visible: it becomes
+        # a question on the board, and a question answered once is a row in
+        # `unit_conversion` for good.
         found = _bridge(source, target, ingredient, conversions)
         if found is None:
             named = ingredient or "this ingredient"

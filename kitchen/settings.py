@@ -19,8 +19,8 @@ import datetime
 # figure someone chose, and `origin` below is how a caller tells them apart.
 #
 # The days are the rhythm the backlog settles on - two shops and two cook
-# sessions a week - arranged so a shop lands the day before a cook, which is
-# what keeps fresh things arriving near to when they are cooked.
+# sessions a week - arranged so a shop lands the day before a cook, so fresh
+# things arrive near to when they are cooked.
 DEFAULTS = {
     "household_size": "1",
     "max_ready_minutes_weeknight": "45",
@@ -78,7 +78,7 @@ def put(cx, key, value, source="user"):
 
 
 def forget(cx, key):
-    """Drop a stated fact, which puts the key back on its default."""
+    """Drop a stated fact. The key goes back on its default."""
     return cx.execute("delete from settings where key = %s", (key,)).rowcount > 0
 
 
@@ -116,7 +116,7 @@ def max_ready_minutes_weekend(cx):
 
 
 def max_ready_minutes(cx, day):
-    """The cap for a given date, which is the number the search filters on.
+    """The cap for a given date: the number the search filters on.
 
     A Saturday afternoon and a Tuesday evening are not the same amount of
     time, and a single cap set for both is wrong twice.
@@ -201,9 +201,9 @@ def recipe_filters(cx):
     """What will not be eaten, shaped for the search the planner already makes.
 
     Spoonacular's complexSearch takes `diet`, `intolerances` and
-    `excludeIngredients` on the same call, which is why this is three query
-    parameters and not a filter run over the results: a recipe that was
-    never going to be cooked should not cost a point to find out about.
+    `excludeIngredients` on the same call, so these are three query parameters
+    and not a filter run over the results: a recipe that was never going to be
+    cooked should not cost a point to find out about.
 
     The diet is one string because the API takes one, and it is None rather
     than empty so a caller drops the parameter instead of sending a blank.
@@ -236,8 +236,8 @@ def remove_equipment(cx, name):
     """Take a piece of kit off the list entirely. True when it was on it.
 
     Different from setting it absent: a row saying `present = false` is the
-    household stating it does not own the thing, which is what the filter
-    below reads. Removing the row says nothing either way.
+    household stating it does not own the thing, and the filter below reads
+    it. Removing the row says nothing either way.
     """
     return cx.execute("delete from equipment where name = lower(%s)",
                       (name.strip(),)).rowcount > 0
@@ -250,7 +250,7 @@ def has_equipment(cx, name):
     for things, so the other rule - unlisted means missing - would drop every
     suggestion on the first day and keep doing it until someone had typed out
     their whole kitchen. Only a row that says `present = false` drops a
-    recipe, which is the household stating it does not own the thing.
+    recipe.
     """
     row = cx.execute("select present from equipment where name = lower(%s)",
                      (name.strip(),)).fetchone()

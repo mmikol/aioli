@@ -2,11 +2,10 @@
 
 The key travels in a header rather than the query string, so no url written
 to a log, a proxy or a traceback carries it. Nothing that comes back is
-written anywhere and nothing is cached to disk: a search is used to make a
-plan and then dropped, which is the terms' one-hour rule taken at its word
-(docs/db.md). Where an hour of holding is worth having - the method at the
-stove, so a reload is free - it belongs in the process that is showing it,
-not here.
+written down or cached to disk: a search is used to make a plan and then
+dropped, which is the terms' one-hour rule taken at its word (docs/db.md).
+Where an hour of holding is worth having - the method at the stove, so a
+reload is free - it belongs in the process that is showing it, not here.
 
 The quota is the other thing that shapes this. The free tier is 50 points a
 day and will not plan a week; Cook is 1500. A wasted call is a real cost, so
@@ -53,8 +52,7 @@ class QuotaExhausted(SpoonacularError):
     """HTTP 402: the day's points are gone.
 
     Its own type because the scheduler treats it differently from every other
-    failure - it defers the run and says so, rather than planning half a week
-    and leaving the rest to be noticed on Wednesday.
+    failure: it defers the run and says so instead of planning half a week.
     """
 
 
@@ -90,7 +88,7 @@ class Spoonacular:
         what returns used, missed and unused alongside the time filter, and the
         planner scores on all of them. Nutrition is asked for when the board or
         a mail is going to show it - shown, never scored - and costs more per
-        result, which is why it is not simply always on.
+        result.
         """
         params = {"fillIngredients": "true", "number": number}
         if include_ingredients:
@@ -115,10 +113,9 @@ class Spoonacular:
         """The second pass, for a week that has to use something up.
 
         `ranking=2` minimises what is missing rather than maximising what is
-        used, which is the question being asked when a chicken turns on
-        Wednesday. `ignorePantry` keeps the service from assuming a cupboard of
-        staples this household may not have: the pantry table is the only
-        pantry here.
+        used: the question when a chicken turns on Wednesday. `ignorePantry`
+        keeps the service from assuming a cupboard of staples this household
+        may not have - the pantry table is the only pantry here.
         """
         params = {"ingredients": _joined(ingredients), "number": number,
                   "ranking": 2, "ignorePantry": "true"}
@@ -128,8 +125,8 @@ class Spoonacular:
         """The method, fetched at the moment of cooking because it may not be kept.
 
         This is the one call made while someone is standing in the kitchen, so
-        a failure here costs more trust than a failure anywhere else and is the
-        caller's to state plainly rather than paper over with a blank card.
+        a failure here costs more trust than a failure anywhere else, and is
+        the caller's to state plainly.
         """
         params = {}
         if nutrition:
@@ -163,12 +160,11 @@ class Spoonacular:
             raise SpoonacularError(f"{path} could not be reached: {error.reason}") from error
         except (OSError, HTTPException) as error:
             # A failure while reading the body, after the request was answered:
-            # a connection reset, a timeout part way through, a truncated
-            # response. Neither HTTPError nor URLError covers it, so without
-            # this it escapes as itself and the ledger never hears about it -
-            # and the service has already charged for a request it answered.
-            # Charging BASE_POINTS overstates at worst, which is the safe
-            # direction: a run defers early rather than starting one it cannot
+            # a connection reset, a truncated response. Neither HTTPError nor
+            # URLError covers it, so without this it escapes as itself and the
+            # ledger never hears about it - and the service has already charged
+            # for a request it answered. Charging BASE_POINTS overstates at
+            # worst: a run defers early rather than starting one it cannot
             # finish.
             self._spend(BASE_POINTS)
             raise SpoonacularError(f"{path} was answered but not read: {error}") from error
@@ -200,7 +196,7 @@ def usage_into(cx, day=None):
     """A recorder bound to a connection, to hand to `Spoonacular(usage=...)`.
 
     The ledger counts in whole points and the service charges fractions, so a
-    call rounds up. Overstating makes a run defer early, which is the harmless
+    call rounds up. Overstating makes a run defer early: the harmless
     direction to be wrong in.
 
     The caller commits, and wants to commit this even when the run it belongs
@@ -256,7 +252,7 @@ def _points_spent(headers, fallback):
 
 
 def _result_count(payload):
-    """How many recipes came back, which is what the fractional charge is per."""
+    """How many recipes came back. The fractional charge is per result."""
     if isinstance(payload, list):
         return len(payload)
     if isinstance(payload, dict) and isinstance(payload.get("results"), list):

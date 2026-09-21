@@ -27,3 +27,6 @@ build/
 
 # logs
 *.log
+
+# desloppify: local scan state, never committed
+.desloppify/

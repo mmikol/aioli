@@ -41,11 +41,11 @@ def pending(cx):
     Ordering is by the parsed version and not by the filename, and a repeated
     version is refused before any SQL runs. Both matter because migrations
     arrive from several hands at once: two people each adding an 004 is the
-    ordinary accident, and the failure it used to cause was the bad kind. The
-    second file would either collide on the primary key and roll the whole
-    boot back with a traceback naming neither file, or - worse, once the first
-    had been applied - be skipped in silence, leaving every table it was meant
-    to create missing while `pending` reported nothing wrong.
+    ordinary accident. The second file would either collide on the primary
+    key and roll the whole boot back with a traceback naming neither file,
+    or - worse, once the first had been applied - be skipped in silence,
+    leaving every table it was meant to create missing while `pending`
+    reported nothing wrong.
     """
     done = applied(cx)
     found, seen = [], {}

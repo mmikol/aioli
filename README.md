@@ -21,7 +21,7 @@ purchase is always a person's click. No credential capable of completing an
 order belongs in the container.
 
 It is not deployed. Every port binds to 127.0.0.1, and `tailscale serve` on
-the host is what carries a phone to the board.
+the host carries a phone to the board.
 
 ## Install
 

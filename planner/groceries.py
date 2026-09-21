@@ -6,8 +6,8 @@ cook's dish is fetched once, run through the matcher, and dropped. That is
 also why there is no `grocery_line` table under this - a row reading "2 cups
 of invented lemon" would be the service's words in a table, and the line does
 not bend for a convenience. The list is a function of the plan, the pantry
-and one pass of lookups, which means it can be built again at any time and
-means nothing goes stale in a table nobody purges.
+and one pass of lookups, so it can be built again at any time and nothing
+goes stale in a table nobody purges.
 
 Three answers rather than two, because matching/ingredients.py already models
 them. What the house holds is not bought. What it plainly does not hold is
@@ -106,7 +106,7 @@ class Line:
 
     @property
     def shared(self):
-        """True when more than one meal wants it, which is the week sharing."""
+        """True when more than one meal wants it."""
         return len(self.meals) > 1
 
     @property
@@ -121,14 +121,19 @@ class Groceries:
 
     `buy` is what the house plainly does not have, `ask` is what nobody has
     confirmed either way, and `held` is what the pantry already answers and
-    nobody has to carry. Keeping the third is not bookkeeping: it is what
-    shows the household that the week was built around what was already in
-    the house, which is the promise the whole planner makes.
+    nobody has to carry. Keeping the third is not bookkeeping: it shows the
+    household that the week was built around what was already in the house,
+    which is the promise the whole planner makes.
 
     `unknown` is the meals whose dish could not be looked up - no key, no
     points, or a service that would not answer. They are named rather than
     quietly left out, because a list missing a dinner nobody mentioned is
     worse than no list at all.
+
+    `dishes` is how many meals the list was actually built from, and it is
+    what tells an empty list from one that could not be built. Both have
+    nothing on them and they mean opposite things: one says the house has
+    everything and the other says nobody knows.
     """
     buy: tuple[Line, ...] = ()
     ask: tuple[Line, ...] = ()
@@ -137,10 +142,11 @@ class Groceries:
     period: str = ""
     note: str = ""
     unknown: tuple[int, ...] = ()
+    dishes: int = 0
 
     @property
     def shared(self):
-        """What is bought for more than one meal, which is the week's overlap."""
+        """What is bought for more than one meal."""
         return tuple(line for line in self.buy if line.shared)
 
     @property
@@ -221,8 +227,9 @@ def gather(wanted, held, *, aliases=None, conversions=()):
     - kept here in the arithmetic the household actually shops from.
 
     No database and no network: every decision this makes is a function of its
-    arguments, which is what lets the whole of it be tested without either.
+    arguments, so the whole of it can be tested without either.
     """
+    wanted = list(wanted)
     remaining = [dict(ingredient=item.ingredient, quantity=item.quantity, unit=item.unit,
                       grade=item.grade, level=item.level) for item in held]
     buy, ask, kept = {}, {}, {}
@@ -231,23 +238,24 @@ def gather(wanted, held, *, aliases=None, conversions=()):
                             row["grade"], row["level"]) for row in remaining]
         coverage = cover(meal.lines, items, aliases=aliases, conversions=conversions)
         for need in coverage.covered:
-            _fold(kept, need, meal, need.quantity, conversions)
+            _fold(kept, _name(need), need, meal, need.quantity, conversions)
             _spend(remaining, need, conversions)
         for need in coverage.missing:
             # What is short where the pantry holds some of it, and the whole
             # amount where it holds none. A staple that is out has no number
             # to be short by, so the recipe's own amount is all there is.
-            _fold(buy, need, meal, need.short if need.short else need.quantity, conversions)
+            _fold(buy, _name(need), need, meal,
+                  need.short if need.short else need.quantity, conversions)
         for need in coverage.uncertain:
-            _fold(ask, need, meal, need.quantity, conversions)
-    return Groceries(_lines(buy), _lines(ask), _lines(kept))
+            _fold(ask, _name(need, as_asked=True), need, meal, need.quantity, conversions)
+    return Groceries(_lines(buy), _lines(ask), _lines(kept), dishes=len(wanted))
 
 
 def by_aisle(lines):
     """The list grouped into the parts of a shop, in the order it is already in.
 
-    A grouping and not a sort: `_lines` has already put the aisles in order
-    and `the rest` last, so this only says where one section ends.
+    `_lines` has already put the aisles in order and `the rest` last, so this
+    only says where one section ends.
     """
     groups = []
     for line in lines:
@@ -266,8 +274,7 @@ def ingredients_of(result):
     this kitchen's arithmetic to do (matching/ingredients.py).
 
     Cut to PER_RECIPE on the way in: `number` is a request and the ceiling
-    above is a promise, and the promise should not rest on the service
-    keeping to what it was asked for.
+    above is a promise.
     """
     found = result.get("extendedIngredients")
     if not isinstance(found, list) or not found:
@@ -292,10 +299,9 @@ def still_to_cook(meal):
 
     A portion of an earlier cook buys nothing: its ingredients went into the
     pan the day before. A skipped meal buys nothing either, and neither does
-    one already cooked - the stock for it has moved and the shopping for it is
-    somebody's memory of last Tuesday, not a list. Replanning a week that went
-    wrong is its own item; leaving a cooked dinner off the shopping is not
-    replanning, it is not buying dinner twice.
+    one already cooked - the stock for it has moved. Replanning a week that
+    went wrong is its own item; leaving a cooked dinner off the shopping is
+    not replanning, it is not buying dinner twice.
     """
     return (meal["kind"] == week.COOK and meal["recipe_id"] is not None
             and not meal["skipped"] and meal["cooked_at"] is None)
@@ -372,24 +378,35 @@ def _summary(dishes, unknown, refusal):
 def _kitchen(cx):
     """The pantry, the answered wordings and the factors, as the matcher wants them.
 
-    Read through planner/week.py's own readers rather than a second set of
-    queries of my own. The plan and the list have to be looking at the same
-    pantry: two spellings of one question is how the week that was planned and
-    the week that is shopped for start disagreeing, and nothing would say
-    which of them was wrong.
+    Read through planner/week.py's own readers instead of a second set of
+    queries. The plan and the list have to be looking at the same pantry: two
+    spellings of one question is how the week that was planned and the week
+    that is shopped for start disagreeing, and nothing would say which of them
+    was wrong.
     """
     return week._pantry_items(cx), week._aliases(cx), week._conversions(cx)
 
 
-def _fold(bucket, need, meal, quantity, conversions):
-    """One line into the list, added to whatever is already under its name.
+def _name(need, *, as_asked=False):
+    """What a line is called on the list.
 
-    The name is the household's own where the matcher found one, and the
-    wording reduced to the thing itself where it did not - "2 cups finely
-    diced tomatoes" becomes "tomato", which is what a person reads on a list
-    and is as close to the household's own words as an unmatched line gets.
+    The household's own name where the matcher settled it, because that is
+    what is written on the shelf the thing goes back onto. Otherwise the
+    wording reduced to the thing itself - "2 cups finely diced tomatoes"
+    becomes "tomato" - which is as close to the household's own words as a
+    line nothing matched ever gets.
+
+    A question is always called what the recipe asked for. Asking "is this
+    your imaginary parsley" under the name `imaginary parsley` would be
+    putting the answer in the question, and the whole point of the third list
+    is that nobody has answered it yet.
     """
-    name = need.ingredient or normalise_name(need.wording) or need.wording.strip()
+    asked = normalise_name(need.wording) or need.wording.strip()
+    return asked if as_asked or not need.ingredient else need.ingredient
+
+
+def _fold(bucket, name, need, meal, quantity, conversions):
+    """One line into the list, added to whatever is already under its name."""
     line = bucket.setdefault(name, {"meals": [], "amounts": [], "aisle": ELSEWHERE,
                                     "reason": need.reason, "candidates": need.match.candidates})
     if meal.meal not in line["meals"]:
@@ -425,8 +442,7 @@ def _spend(remaining, need, conversions):
 
     Only a measured line moves anything. A staple is in stock or it is not and
     has no quantity to spend (kitchen/pantry.py), and a line the recipe gave
-    no amount for is presence rather than arithmetic, so neither is deducted -
-    which is the same answer the pantry itself would give.
+    no amount for is presence rather than arithmetic, so neither is deducted.
     """
     if need.quantity is None or need.unit is None or need.ingredient is None:
         return
