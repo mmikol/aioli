@@ -6,6 +6,7 @@ in `schema_migrations`, so a container that starts twice migrates once.
 """
 import os
 import pathlib
+import re
 
 import psycopg
 
@@ -35,13 +36,32 @@ def applied(cx):
 
 
 def pending(cx):
-    """The migration files not yet applied, in order."""
+    """The migration files not yet applied, oldest first.
+
+    Ordering is by the parsed version and not by the filename, and a repeated
+    version is refused before any SQL runs. Both matter because migrations
+    arrive from several hands at once: two people each adding an 004 is the
+    ordinary accident, and the failure it used to cause was the bad kind. The
+    second file would either collide on the primary key and roll the whole
+    boot back with a traceback naming neither file, or - worse, once the first
+    had been applied - be skipped in silence, leaving every table it was meant
+    to create missing while `pending` reported nothing wrong.
+    """
     done = applied(cx)
-    found = []
+    found, seen = [], {}
     for path in sorted(MIGRATIONS.glob("*.sql")):
-        version = int(path.name.split("-", 1)[0])
+        named = re.fullmatch(r"(\d+)-.+\.sql", path.name)
+        if not named:
+            raise ValueError("%s is not a migration: the name wants <number>-<what-it-does>.sql"
+                             % path.name)
+        version = int(named.group(1))
+        if version in seen:
+            raise ValueError("two migrations claim %d: %s and %s"
+                             % (version, seen[version], path.name))
+        seen[version] = path.name
         if version not in done:
             found.append((version, path))
+    found.sort(key=lambda pair: pair[0])
     return found
 
 

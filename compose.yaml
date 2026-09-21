@@ -19,14 +19,15 @@ x-app: &app
     - no-new-privileges:true
   cap_drop:
     - ALL
-  # The host is a 16 GB machine at the small end, and this stack is not the
-  # only thing on it. The limits are what that machine can spare, not what
-  # the development machine could give.
+  # How much of the host this stack may take is the host's business, not
+  # this file's, so every figure is a setting. The defaults suit a roomy
+  # machine; .env.example carries the small-host profile, and moving between
+  # them is editing .env rather than editing this.
   deploy:
     resources:
       limits:
-        memory: 512m
-        pids: 256
+        memory: ${AIOLI_APP_MEMORY:-1g}
+        pids: ${AIOLI_APP_PIDS:-256}
   networks: [stack]
   environment: &env
     AIOLI_DATABASE_URL: postgresql://aioli:${POSTGRES_PASSWORD:-aioli}@db/aioli
@@ -46,19 +47,20 @@ services:
       POSTGRES_DB: aioli
     security_opt:
       - no-new-privileges:true
-    # One household's data and one reader: the defaults are sized for a
-    # server, and this is not one.
+    # One household's data and one reader: PostgreSQL's own defaults are
+    # sized for a server, and this is not one. The figures are settings for
+    # the same reason the app's are.
     command:
       - postgres
       - -c
-      - shared_buffers=128MB
+      - shared_buffers=${AIOLI_DB_SHARED_BUFFERS:-512MB}
       - -c
-      - max_connections=20
+      - max_connections=${AIOLI_DB_MAX_CONNECTIONS:-40}
     deploy:
       resources:
         limits:
-          memory: 768m
-          pids: 128
+          memory: ${AIOLI_DB_MEMORY:-2g}
+          pids: ${AIOLI_DB_PIDS:-128}
     networks: [stack]
     ports:
       - "127.0.0.1:5434:5432"

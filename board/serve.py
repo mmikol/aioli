@@ -45,6 +45,12 @@ def health():
 class Handler(BaseHTTPRequestHandler):
     """Routing, and the errors a browser should see rather than a stack."""
 
+    # A connection that opens and sends nothing otherwise blocks in readline
+    # with no deadline, and ThreadingHTTPServer gives every connection its own
+    # thread and no cap. The board answers from the tailnet and has no login of
+    # its own, so a stalled socket must not be able to hold a thread for good.
+    timeout = 10
+
     def log_message(self, fmt, *args):     # the default logs to stderr per hit
         pass
 
@@ -64,7 +70,12 @@ class Handler(BaseHTTPRequestHandler):
         query = parse_qs(urlparse(self.path).query)
         try:
             if path == "/health":
-                return self._json(health())
+                # A pending migration has to reach the healthcheck as a status
+                # code: the checker calls urlopen and looks at nothing else, so
+                # a failure written only into the body is a failure nobody
+                # reads. 503 is the honest one - up, and not fit to serve.
+                body = health()
+                return self._json(body, 200 if body["status"] == "ok" else 503)
             if path in STATIC_FILES:
                 found = STATIC / pathlib.Path(path).name
                 if not found.exists():

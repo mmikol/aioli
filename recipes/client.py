@@ -18,6 +18,7 @@ starts, because half a planned week is worse than an honest postponement.
 import json
 import math
 import os
+from http.client import HTTPException
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
@@ -160,6 +161,17 @@ class Spoonacular:
             # should read as tried, not as never started.
             self._spend(0.0)
             raise SpoonacularError(f"{path} could not be reached: {error.reason}") from error
+        except (OSError, HTTPException) as error:
+            # A failure while reading the body, after the request was answered:
+            # a connection reset, a timeout part way through, a truncated
+            # response. Neither HTTPError nor URLError covers it, so without
+            # this it escapes as itself and the ledger never hears about it -
+            # and the service has already charged for a request it answered.
+            # Charging BASE_POINTS overstates at worst, which is the safe
+            # direction: a run defers early rather than starting one it cannot
+            # finish.
+            self._spend(BASE_POINTS)
+            raise SpoonacularError(f"{path} was answered but not read: {error}") from error
         try:
             payload = json.loads(body.decode("utf-8"))
         except ValueError as error:

@@ -55,16 +55,22 @@ The decisions the items below assume, so no item has to restate them.
   nothing hard-codes a serving count.
 - **The board is a web page in the container.** Marking a meal skipped and
   editing the pantry are both editing, and editing wants a page.
-- **It runs on a 16 to 32 GB machine, not the one it is written on.** The
-  whole stack - PostgreSQL, the board, the clock - has to leave room for
-  the rest of that machine's life, so every service carries a memory limit
-  and the limits assume the small end. Two consequences worth stating
-  once. The planner's search is bounded work over a week of meals rather
-  than a solver turned loose, so its ceiling is known before it runs. And
-  a local model, if one is ever used here, is an 8B at that size and not a
-  34B: on 16 GB a larger one either will not load beside PostgreSQL or
-  will page, and paging on Apple Silicon does not fail, it just goes
-  quietly slow.
+- **How much of the host it may take is a setting.** Every service carries
+  a memory limit and every limit is an environment variable, because the
+  machine this runs on is not settled and the code should not care. The
+  defaults suit the machine it is written on, 64 GB, where the stack is a
+  rounding error; `.env.example` carries the profile for a 16 GB host that
+  is also running a model, and moving between them is editing `.env`.
+  Nothing is reserved - PostgreSQL idles around 16 MB of whatever ceiling
+  it is given.
+
+  One consequence holds whatever the host: the planner's search is bounded
+  work over a week of meals rather than a solver turned loose, so its
+  ceiling is known before it runs. A machine with room is not a reason to
+  write something that needs it. The other is a sizing note rather than a
+  rule - a local model beside this stack is an 8B on 16 GB and can be a
+  32B on 64 GB, and on Apple Silicon getting that wrong does not fail, it
+  goes quietly slow.
 - **The board stays on 127.0.0.1; the tailnet does the reaching.** Nothing
   is published and no port is opened. `tailscale serve` on the host
   proxies the board onto the tailnet, so a phone can answer a

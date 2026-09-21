@@ -21,10 +21,22 @@ from urllib.error import HTTPError
 SYNTHETIC_MARKERS = ("fictional", "notional", "invented", "imaginary", "pretend",
                      "make-believe")
 
-# The keys whose text is a recipe's own words, and so must always be invented.
-# `name` is left out on purpose: an equipment name is a kitchen's vocabulary
-# rather than a recipe's, and "skillet" is the word for a skillet.
-INVENTED_TEXT_KEYS = ("title", "original", "originalName", "step", "instructions")
+# The guard is closed by default: every string in a fixture is assumed to be a
+# recipe's own words unless its key is on the list below. An allow-list of
+# keys-that-must-be-invented was the first shape and it was the wrong one - it
+# passed over `summary` and `localizedName`, which the fixtures already carry
+# and which are the service's own prose, so a pasted live response would have
+# sailed through the one test standing between it and a public repo. A field
+# the service adds tomorrow now fails closed rather than slipping past unread.
+#
+# What is exempt is vocabulary rather than authorship: an aisle, a unit, a
+# media type, a diet. "Skillet" is the word for a skillet, and a canned-goods
+# aisle is a supermarket's word, not a recipe's.
+TAXONOMY_KEYS = frozenset((
+    "aisle", "unit", "unitLong", "unitShort", "consistency", "imageType",
+    "image", "sourceUrl", "sourceName", "creditsText", "license", "name",
+    "dishTypes", "diets", "cuisines", "occasions", "equipment",
+))
 
 
 def _ingredient(ingredient_id, name, amount, unit, original, aisle):
@@ -161,7 +173,7 @@ INFORMATION = {
                          "image": "https://example.invalid/pretend-olive-oil.jpg"},
                     ],
                     "equipment": [
-                        {"id": 20001, "name": "frying pan", "localizedName": "frying pan",
+                        {"id": 20001, "name": "frying pan", "localizedName": "notional frying pan",
                          "image": "https://example.invalid/frying-pan.jpg"},
                     ],
                 },
@@ -254,19 +266,24 @@ def shape_errors(expected, actual, path="$"):
     return []
 
 
-def invented_text(value, keys=INVENTED_TEXT_KEYS):
-    """Every piece of a fixture that is a recipe's own words, for the test that
-    insists all of it is made up."""
+def invented_text(value, exempt=TAXONOMY_KEYS, key=None):
+    """Every string in a fixture that has to be made up, for the test that
+    insists all of it is.
+
+    Collected by default and exempted by name, so a field nobody thought about
+    is caught rather than missed. A string reached through a list carries the
+    key the list hung from, since an `instructions` expressed as a list of
+    steps is as much the service's prose as one expressed as a paragraph.
+    """
     found = []
     if isinstance(value, dict):
-        for key, inner in value.items():
-            if key in keys and isinstance(inner, str) and inner.strip():
-                found.append(inner)
-            else:
-                found.extend(invented_text(inner, keys))
+        for inner_key, inner in value.items():
+            found.extend(invented_text(inner, exempt, inner_key))
     elif isinstance(value, list):
         for item in value:
-            found.extend(invented_text(item, keys))
+            found.extend(invented_text(item, exempt, key))
+    elif isinstance(value, str) and value.strip() and key not in exempt:
+        found.append(value)
     return found
 
 
