@@ -30,6 +30,12 @@ The decisions the items below assume, so no item has to restate them.
   nothing hard-codes a serving count.
 - **The board is a web page in the container.** Marking a meal skipped and
   editing the pantry are both editing, and editing wants a page.
+- **The board stays on 127.0.0.1; the tailnet does the reaching.** Nothing
+  is published and no port is opened. `tailscale serve` on the host
+  proxies the board onto the tailnet, so a phone can answer a
+  confirmation from anywhere and the container's binding never changes.
+  This keeps the deployment story the same as next door: there is no
+  deployment.
 - **Store prices come from a price book the user keeps.** Whole Foods and
   Costco publish no API. See the closing section.
 - **AIoli never buys anything.** It may fill a cart and it may say what a
@@ -273,23 +279,47 @@ The decisions the items below assume, so no item has to restate them.
   whole system is being used in earnest, so failing there costs more trust
   than failing anywhere else.
 
-- **Nothing runs unattended.** The container keeps its own clock: one
-  planning run a week, the mails on their two days, and every run
-  idempotent, because a retry that plans the same week twice or moves the
-  same stock twice is worse than a run that never happened. A run that
-  fails is the real design problem - a quota spent, the API down, a
-  network gone - since the failure mode is discovering on Sunday that
-  there is no dinner plan. So a failed run still reports, saying what
-  broke and what the last good plan was. Cost: half a day.
+- **Nothing runs unattended.** A clock of its own, as a service beside the
+  board rather than a thread inside it or a cron daemon under it, waking
+  to see what is due and sleeping again. Times come from the environment,
+  `AIOLI_PLAN_AT` and `TZ`, the way the refresher next door takes them.
+
+  The ledger is the part that earns the item. Every job writes a row keyed
+  by the period it covers and not the moment it ran - `plan_week` for
+  `2026-W39`, started, finished, outcome - and refuses a second run for a
+  period already done unless forced. That one rule is what makes a retry
+  safe, stops a laptop waking on Monday from planning the week twice, and
+  stops one meal decrementing the pantry twice. It is also what the mails
+  read to say what happened.
+
+  Two behaviours follow from it. On start, a period that is due and has no
+  row is run, so a machine asleep on Saturday morning catches up on
+  Saturday afternoon instead of skipping the week in silence. And a run
+  checks the quota it needs before it begins, then defers or plans fewer
+  days, because half a planned week is worse than an honest postponement.
+  A failed run still reports, saying what broke and naming the last good
+  plan. Cost: half a day.
 
 - **Nothing tells you any of this.** Two mails a week, and they are not
-  the same mail twice. Before the shop: the week's plan, the list by
-  store, the total against the budget, and the trips and cook sessions as
-  things to do. Midweek: what is left, what turns soon, and the
-  confirmations the pantry needs to stay true - which is the real job, the
-  summary being how it earns the open. SMTP credentials in `.env` beside
-  the API key. Cost: a day; risk: a mail nobody reads is a pantry nobody
-  corrects, so brevity is a requirement and not a preference.
+  the same mail twice.
+
+  Saturday, after the planning run: the week's plan, the list by store,
+  the total against the budget, and the trips and cook sessions as things
+  to do. Both `.ics` files ride along as attachments, which is how the
+  calendar gets filled today without waiting for the tool that will read
+  them properly.
+
+  Midweek: what is left, what turns soon, and the confirmations the pantry
+  needs to stay true. That is the real job; the summary is how it earns
+  being opened. Each confirmation is a link into the board, which reaches
+  a phone over the tailnet, so answering is a tap at the moment the answer
+  is known rather than a chore deferred to the next time someone sits at
+  the machine.
+
+  A failed run mails too, on the same schedule, saying what broke and what
+  the last good plan was. SMTP credentials in `.env` beside the API key.
+  Cost: a day; risk: a mail nobody reads is a pantry nobody corrects, so
+  brevity is a requirement and not a preference.
 
 - **The household's facts are the chef's columns.** Household size, the
   budget per meal, the evenings that are free and what the household will
@@ -317,7 +347,9 @@ The decisions the items below assume, so no item has to restate them.
   the Amazon session is the one that tests it: it is allowed to fill a
   cart and must not be able to place the order. A `SECURITY.md` saying
   what is held, what each one can do, what it cannot, and what an attacker
-  who reached the container would get. Cost: half a day.
+  who reached the container would get. The confirmation links are part of
+  this: the tailnet is the perimeter, the board has no login of its own,
+  and a link that moves stock should not be guessable. Cost: half a day.
 
 - **The hand-entered data has no copy.** The price book and the pantry are
   hours of a person's typing and exist nowhere else; a dropped volume
