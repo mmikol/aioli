@@ -41,6 +41,11 @@ The decisions the items below assume, so no item has to restate them.
   the house first and bought for second. Waste is the thing being
   minimised, and an ingredient already owned and ageing is worth more than
   a cheaper recipe that leaves it to spoil.
+- **Nutrition is shown, never optimised.** Spoonacular returns calories
+  and macros with the recipe, so the board and the mails carry them. The
+  planner does not read them. Budget and waste are the two objectives, and
+  a third pulling against both buys a harder solver for a goal nobody
+  asked for.
 
 ## Next
 
@@ -48,6 +53,15 @@ The decisions the items below assume, so no item has to restate them.
   this file. Nothing can be built until there is a runtime, an image and a
   compose file to run it under. Python 3.12 and PostgreSQL, matching the
   stack next door, so one set of habits covers both. Cost: half a day.
+
+- **Nothing knows what you will not eat.** No diet, no allergy, no
+  intolerance, no simple dislike is recorded anywhere, so the planner is
+  free to suggest a thing that was never going to be cooked. Spoonacular
+  takes `diet`, `intolerances` and `excludeIngredients` on the same search
+  the planner already makes, so the cost is a settings table and three
+  query parameters. It sits this high because every item below it reads
+  the plan it shapes, and retrofitting a filter under a working planner is
+  how a week of suggestions gets thrown away. Cost: half a day.
 
 - **Nothing pulls a recipe.** A Spoonacular client, its key read from
   `.env` and never committed, over `complexSearch` for suggestions and
@@ -67,6 +81,19 @@ The decisions the items below assume, so no item has to restate them.
   measured against it. The shelf life is what makes ageing stock rank
   ahead of fresh, so it is not an optional column. Cost: a day.
 
+- **The pantry has no way to tell the truth.** Nothing decrements it when
+  a meal is cooked, increments it when a shop happens, or records that
+  Tuesday was a takeaway. Three weeks of that and the table describes a
+  kitchen that does not exist, and every promise built on it - the waste
+  it minimises, the list it subtracts from, the budget it reports - is
+  computed against fiction. So: a cooked, bought, skipped and finished
+  event per plan line, each one moving stock, and a standing assumption
+  that an unconfirmed meal did not happen rather than that it did. The
+  confirmations want asking for at the moment the answer is known, which
+  is what the midweek mail below is for. Cost: a day, and it is the
+  cheapest day in this file. Risk: ask too often and it gets ignored,
+  which is the same as not having it.
+
 - **The price book does not exist.** Whole Foods and Costco publish no
   API, so a table of the staples actually bought, each with a store, a
   brand, a product as it is labelled on the shelf, a pack size and a
@@ -82,6 +109,18 @@ The decisions the items below assume, so no item has to restate them.
   sale price and the date it runs until, so a thing on offer is a thing
   the planner can reach for while the offer lasts and not after. Cost: a
   day.
+
+- **An ingredient is not a product.** "2 cups diced tomatoes" has to
+  become "Kirkland diced tomatoes, 28 oz" before it can be priced,
+  subtracted from the pantry or put in a cart, and that mapping is fuzzy
+  in three ways at once: the wording differs, the units differ, and a
+  recipe's amount rarely divides into a pack size. It is currently hidden
+  inside the grocery list as though it were an implementation detail; it
+  is the crux of the list, the pantry maths and the cart alike, and it
+  earns a table of its own - ingredient, product, the conversion between
+  their units - plus a way to correct a match by hand, because it will be
+  wrong often enough that a silent wrong answer is worse than an asked
+  question. Cost: two days.
 
 - **Nothing plans a week.** The planner proper: lunch and dinner for seven
   days, each recipe cooked once and eaten twice on consecutive days, meals
@@ -100,6 +139,21 @@ The decisions the items below assume, so no item has to restate them.
   the budget, the pantry, the deals
   and the two-day pairing pull against each other, and the first version
   will want a constraint solver before it wants more heuristics.
+
+- **Not everything reheats.** Cooking once and eating twice is right for a
+  chili and wrong for a fish, a salad or anything fried, and no source
+  publishes a keeps-well flag to sort them. Without one the planner will
+  confidently pair a thing that is inedible on the second day, which is
+  the fastest way to lose trust in the whole plan. A judgement stored per
+  recipe, defaulted by category and corrected on the board when a pairing
+  turns out badly; a recipe that does not keep is cooked for one meal and
+  the pairing rule bends around it. Cost: half a day.
+
+- **The same dinner every week.** A fixed budget, a fixed household and a
+  stable pantry give the planner one right answer, and it will keep
+  finding it. A table of what has been planned before and a cooldown that
+  costs a recent recipe its place, so variety is a constraint rather than
+  a hope. Cost: half a day.
 
 - **A plan does not become a grocery list.** What the plan needs, minus
   what the pantry holds, resolved against the price book into what to buy
@@ -123,7 +177,33 @@ The decisions the items below assume, so no item has to restate them.
 - **There is nothing to look at.** The board: the week's plan, which meals
   are skipped, the grocery list by store, the pantry, and the price book.
   Read-only would be half of it, since marking a skip and correcting the
-  pantry are both writes. Cost: two days.
+  pantry are both writes. Calories and macros ride along on each meal,
+  shown and never scored. Cost: two days.
+
+- **Nothing runs unattended.** The container keeps its own clock: one
+  planning run a week, the mails on their two days, and every run
+  idempotent, because a retry that plans the same week twice or moves the
+  same stock twice is worse than a run that never happened. A run that
+  fails is the real design problem - a quota spent, the API down, a
+  network gone - since the failure mode is discovering on Sunday that
+  there is no dinner plan. So a failed run still reports, saying what
+  broke and what the last good plan was. Cost: half a day.
+
+- **Nothing tells you any of this.** Two mails a week, and they are not
+  the same mail twice. Before the shop: the week's plan, the list by
+  store, the total against the budget, and the trips and cook sessions as
+  things to do. Midweek: what is left, what turns soon, and the
+  confirmations the pantry needs to stay true - which is the real job, the
+  summary being how it earns the open. SMTP credentials in `.env` beside
+  the API key. Cost: a day; risk: a mail nobody reads is a pantry nobody
+  corrects, so brevity is a requirement and not a preference.
+
+- **The hand-entered data has no copy.** The price book and the pantry are
+  hours of a person's typing and exist nowhere else; a dropped volume
+  takes both, and with them every price the budget is computed from. A
+  dump to a file the user keeps, on a schedule and on demand, restorable
+  into an empty database. Unlike a recipe, this is the user's own record,
+  so nothing forbids keeping it. Cost: half a day.
 
 - **The list has to be retyped into a cart.** Last, and only once the
   list is trustworthy: fill an Amazon Whole Foods cart from the Whole
