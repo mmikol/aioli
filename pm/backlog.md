@@ -49,6 +49,12 @@ The decisions the items below assume, so no item has to restate them.
   a trainer agent is exactly what would hand the chef a protein floor, and
   a schema that dropped the numbers would owe a migration on the day it
   arrived.
+- **The budget is given, not decided.** The chef is handed a figure per
+  meal and plans inside it. It does not set one, carry one between weeks,
+  or judge what the household can afford; what it hands back is what a
+  plan costs. Today that figure is typed into the settings; when an
+  accountant exists it arrives from there through the same field. An agent
+  does not own a value because it optimises against one.
 - **AIoli is the first of several agents.** An accountant and a trainer
   are expected, and the contract they will all keep is in
   [docs/fleet.md](../docs/fleet.md): own your data, expose MCP tools,
@@ -208,12 +214,13 @@ The decisions the items below assume, so no item has to restate them.
   corrects, so brevity is a requirement and not a preference.
 
 - **The household's facts are the chef's columns.** Household size, the
-  budget, the evenings that are free and what the household will not eat
-  are facts about the household, lodged with the chef only because the
-  chef exists first. An accountant wants the first two and a trainer the
-  last, so they belong in a table of their own rather than scattered as
-  columns on whatever needed them. Doing it now is a table; doing it after
-  the accountant is a migration and a reconciliation. Cost: half a day.
+  budget per meal, the evenings that are free and what the household will
+  not eat are facts the chef reads and does not own, lodged with it only
+  because it exists first. They belong in one table of settings, each with
+  a source, so that the day a figure starts arriving from another agent is
+  a change of source and not a migration. Doing it now is a table; doing
+  it after the accountant is a migration and a reconciliation. Cost: half
+  a day.
 
 - **Nothing outside can ask AIoli anything.** The functions the chef
   already has internally - the week's plan, what is in the pantry, the

@@ -42,12 +42,22 @@ Some facts belong to the household and are only lodged with the chef
 because the chef exists first. They live in their own table so that moving
 them out later is a move and not a rewrite.
 
-| fact | who else wants it |
-| --- | --- |
-| household size | the accountant, for a cost per person |
-| the budget | the accountant owns it; the chef spends a slice |
-| calendar availability | everyone; the evenings are finite |
-| dietary constraints | the chef and the trainer, and they must not diverge |
+| fact | who owns it | what the chef does with it |
+| --- | --- | --- |
+| household size | the household | reads it; servings follow it |
+| the budget | the accountant, when it exists | reads it; plans within it |
+| calendar availability | the household | reads it; schedules around it |
+| dietary constraints | the trainer, when it exists | reads it; filters on it |
+
+An agent does not own a value because it optimises against one. The chef is
+given a budget per meal and plans inside it; it does not set one, move one
+between weeks, or hold an opinion about what the household can afford. What
+it gives back is what a plan costs, which is the number an accountant wants
+anyway. Today the budget is typed into the settings table; later it arrives
+from the accountant through the same field, and nothing else changes.
+
+The same goes for a protein floor, if a trainer ever sets one: a constraint
+the chef honours, never a target the chef chooses.
 
 ## The calendar is where agents collide first
 
