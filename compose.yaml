@@ -1,0 +1,68 @@
+# One container per role, from one image.
+#
+#   db      PostgreSQL: the household's own record
+#   board   the page, http://localhost:8018, and the migrations on boot
+#
+# The board binds to 127.0.0.1 and nothing is published; `tailscale serve`
+# on the host is what carries a phone to it (docs/fleet.md).
+
+name: aioli
+
+x-app: &app
+  image: aioli
+  build: .
+  restart: unless-stopped
+  read_only: true
+  tmpfs:
+    - /tmp
+  security_opt:
+    - no-new-privileges:true
+  cap_drop:
+    - ALL
+  networks: [stack]
+  environment: &env
+    AIOLI_DATABASE_URL: postgresql://aioli:${POSTGRES_PASSWORD:-aioli}@db/aioli
+    SPOONACULAR_KEY: ${SPOONACULAR_KEY:-}
+    TZ: ${TZ:-UTC}
+
+networks:
+  stack: {}
+
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: aioli
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-aioli}
+      POSTGRES_DB: aioli
+    security_opt:
+      - no-new-privileges:true
+    networks: [stack]
+    ports:
+      - "127.0.0.1:5434:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U aioli -d aioli"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  board:
+    <<: *app
+    command: ["board"]
+    ports:
+      - "127.0.0.1:8018:8018"
+    depends_on:
+      db:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c",
+             "import urllib.request;urllib.request.urlopen('http://localhost:8018/health')"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+
+volumes:
+  pgdata:

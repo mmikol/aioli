@@ -1,0 +1,21 @@
+[project]
+name = "aioli"
+version = "0.1.0"
+description = "A personal chef assistant"
+requires-python = ">=3.12"
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B"]
+# The house writes "%s" and means it: percent formatting reads as prose in a
+# log line, and the codebase next door is written the same way.
+ignore = ["UP031"]
+
+[tool.coverage.run]
+omit = ["tests/*", ".venv/*"]
+
+[tool.coverage.report]
+fail_under = 0

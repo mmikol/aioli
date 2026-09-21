@@ -1,0 +1,35 @@
+# Lint and test on every push to main and every pull request.
+#
+# CI has no database and no API key, so what runs here is ruff plus every
+# test that needs neither. Tests marked `database` skip themselves when
+# AIOLI_NO_DATABASE is set; tests marked `contract` call the real
+# Spoonacular API and never run here at all.
+
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  lint-and-test:
+    runs-on: ubuntu-latest
+    env:
+      AIOLI_NO_DATABASE: "1"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Lint (ruff)
+        run: python -m ruff check .
+
+      - name: Tests (database and contract tests skip themselves)
+        run: python -m pytest -q -rs -m "not contract" --cov --cov-fail-under=0
