@@ -11,12 +11,15 @@ The quota is the other thing that shapes this. The free tier is 50 points a
 day and will not plan a week; Cook is 1500. A wasted call is a real cost, so
 every attempt is counted through a recorder the caller injects, which keeps
 the client testable without a database. `usage_into` binds a connection to
-that recorder and `remaining_points` is what the scheduler asks before it
-starts, because half a planned week is worse than an honest postponement.
+that recorder, and `remaining_points` is what the scheduler will ask before
+it starts - the scheduler is an after-MVP item (pm/backlog.md) and this is
+the seam it reads, because half a planned week is worse than an honest
+postponement.
 """
 import json
 import math
 import os
+from collections.abc import Callable, Iterable
 from http.client import HTTPException
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
@@ -40,10 +43,18 @@ POINTS_PER_RESULT_WITH_NUTRITION = 0.025
 QUOTA_HEADER = "X-API-Quota-Request"
 
 
+# What went wrong, in the one word a caller branches on. The sentence a
+# person reads is the caller's - the stove says it to somebody at a pan and
+# the planner says it on a note nobody is standing over - but which of the
+# four it is is not, because three isinstance ladders is three places to
+# forget a case and one of them did.
+NO_KEY, QUOTA, REFUSED, UNREACHABLE = "no key", "quota", "refused", "unreachable"
+
+
 class SpoonacularError(Exception):
     """The service refused, or never answered. Carries a status where there is one."""
 
-    def __init__(self, message, status=None):
+    def __init__(self, message: str, status: int | None = None):
         super().__init__(message)
         self.status = status
 
@@ -67,9 +78,15 @@ class Spoonacular:
     ledger is the caller's business and the client needs no database to be
     tested. `opener` stands in for `urllib.request.urlopen` and is how the
     tests keep the network out of a normal run.
+
+    Every one of the three calls below raises SpoonacularError when the
+    service refuses or cannot be reached - QuotaExhausted on a 402, and the
+    constructor MissingKey when there is no key - so a caller catches the base
+    class and asks `trouble_of` which of the four it was.
     """
 
-    def __init__(self, key=None, usage=None, opener=None, timeout=15.0, base=BASE):
+    def __init__(self, key: str | None = None, *, usage: Callable | None = None,
+                 opener: Callable | None = None, timeout: float = 15.0, base: str = BASE):
         key = key or os.environ.get("SPOONACULAR_KEY")
         if not key:
             raise MissingKey("SPOONACULAR_KEY is not set")
@@ -79,9 +96,13 @@ class Spoonacular:
         self._timeout = timeout
         self._base = base.rstrip("/")
 
-    def complex_search(self, *, include_ingredients=None, exclude_ingredients=None,
-                       diet=None, intolerances=None, max_ready_time=None,
-                       min_servings=None, max_servings=None, number=10, nutrition=False):
+    def complex_search(self, *, include_ingredients: Iterable[str] | None = None,
+                       exclude_ingredients: Iterable[str] | None = None,
+                       diet: str | Iterable[str] | None = None,
+                       intolerances: Iterable[str] | None = None,
+                       max_ready_time: int | None = None, min_servings: int | None = None,
+                       max_servings: int | None = None, number: int = 10,
+                       nutrition: bool = False) -> dict[str, object]:
         """What to suggest, searched from the pantry outward.
 
         `fillIngredients` is not a parameter the caller gets to turn off: it is
@@ -109,7 +130,8 @@ class Spoonacular:
             params["addRecipeNutrition"] = "true"
         return self._get("/recipes/complexSearch", params, nutrition=nutrition)
 
-    def find_by_ingredients(self, ingredients, *, number=10):
+    def find_by_ingredients(self, ingredients: Iterable[str], *,
+                            number: int = 10) -> list[dict[str, object]]:
         """The second pass, for a week that has to use something up.
 
         `ranking=2` minimises what is missing rather than maximising what is
@@ -121,7 +143,8 @@ class Spoonacular:
                   "ranking": 2, "ignorePantry": "true"}
         return self._get("/recipes/findByIngredients", params)
 
-    def information(self, recipe_id, *, nutrition=False):
+    def information(self, recipe_id: int, *,
+                    nutrition: bool = False) -> dict[str, object]:
         """The method, fetched at the moment of cooking because it may not be kept.
 
         This is the one call made while someone is standing in the kitchen, so
@@ -131,14 +154,21 @@ class Spoonacular:
         params = {}
         if nutrition:
             params["includeNutrition"] = "true"
-        return self._get(f"/recipes/{int(recipe_id)}/information", params, nutrition=nutrition)
+        return self._get("/recipes/%d/information" % int(recipe_id), params,
+                         nutrition=nutrition)
 
-    def _get(self, path, params, nutrition=False):
+    def _get(self, path: str, params: dict, *, nutrition: bool = False):
         """One request, its answer parsed, and what it cost recorded either way."""
-        url = f"{self._base}{path}?{urlencode(params)}" if params else self._base + path
+        url = ("%s%s?%s" % (self._base, path, urlencode(params))
+               if params else self._base + path)
         request = Request(url, headers={"x-api-key": self._key, "Accept": "application/json"})
+        # Captured before the body is read, so a failure part way through it
+        # is still classified as a refusal the service answered rather than as
+        # a service nobody could reach (`trouble_of`).
+        status = None
         try:
             with self._opener(request, timeout=self._timeout) as response:
+                status = getattr(response, "status", None)
                 body = response.read()
                 headers = getattr(response, "headers", None)
         except HTTPError as error:
@@ -149,15 +179,18 @@ class Spoonacular:
             self._spend(_points_spent(getattr(error, "headers", None), fallback))
             if error.code == 402:
                 raise QuotaExhausted(
-                    f"the day's points are spent; {path} was refused", status=402) from error
+                    "the day's points are spent; %s was refused" % path,
+                    status=402) from error
             raise SpoonacularError(
-                f"{path} failed with HTTP {error.code}", status=error.code) from error
+                "%s failed with HTTP %s" % (path, error.code),
+                status=error.code) from error
         except URLError as error:
             # Nothing was spent because nothing landed, but the attempt is
             # still worth counting: a run that cannot reach the service at all
             # should read as tried, not as never started.
             self._spend(0.0)
-            raise SpoonacularError(f"{path} could not be reached: {error.reason}") from error
+            raise SpoonacularError(
+                "%s could not be reached: %s" % (path, error.reason)) from error
         except (OSError, HTTPException) as error:
             # A failure while reading the body, after the request was answered:
             # a connection reset, a truncated response. Neither HTTPError nor
@@ -167,22 +200,39 @@ class Spoonacular:
             # worst: a run defers early rather than starting one it cannot
             # finish.
             self._spend(BASE_POINTS)
-            raise SpoonacularError(f"{path} was answered but not read: {error}") from error
+            raise SpoonacularError(
+                "%s was answered but not read: %s" % (path, error), status=status) from error
         try:
             payload = json.loads(body.decode("utf-8"))
         except ValueError as error:
             self._spend(_points_spent(headers, BASE_POINTS))
-            raise SpoonacularError(f"{path} answered with something that is not JSON") from error
-        self._spend(_points_spent(headers, estimate_points(_result_count(payload), nutrition)))
+            raise SpoonacularError(
+                "%s answered with something that is not JSON" % path, status=status) from error
+        self._spend(_points_spent(
+            headers, estimate_points(_result_count(payload), nutrition=nutrition)))
         return payload
 
-    def _spend(self, points, calls=1):
+    def _spend(self, points: float, *, calls: int = 1) -> None:
         """Hand the cost to whoever is keeping the ledger, if anyone is."""
         if self._usage is not None:
             self._usage(points, calls)
 
 
-def estimate_points(results, nutrition=False):
+def trouble_of(error: SpoonacularError) -> str:
+    """Which of the four ways a call out can fail this one was.
+
+    'refused' and 'unreachable' are told apart by whether the service
+    answered at all: a 404 and a dead network are both failures and only one
+    of them is worth saying "could not be reached" about.
+    """
+    if isinstance(error, MissingKey):
+        return NO_KEY
+    if isinstance(error, QuotaExhausted):
+        return QUOTA
+    return REFUSED if error.status is not None else UNREACHABLE
+
+
+def estimate_points(results: int, *, nutrition: bool = False) -> float:
     """What a call of this size costs, for when the service does not say.
 
     Rounded towards spending more rather than less: a planner that thinks it
@@ -192,7 +242,7 @@ def estimate_points(results, nutrition=False):
     return BASE_POINTS + per * max(0, int(results))
 
 
-def usage_into(cx, day=None):
+def usage_into(cx, *, day: str | None = None) -> Callable[[float, int], None]:
     """A recorder bound to a connection, to hand to `Spoonacular(usage=...)`.
 
     The ledger counts in whole points and the service charges fractions, so a
@@ -203,7 +253,7 @@ def usage_into(cx, day=None):
     to fails: the points went whether or not the week got planned, and a
     ledger that rolls back with the work spends them twice.
     """
-    def record(points, calls):
+    def record(points: float, calls: int) -> None:
         cx.execute(
             "insert into api_usage (day, points, calls)"
             " values (coalesce(%s::date, current_date), %s, %s)"
@@ -215,34 +265,29 @@ def usage_into(cx, day=None):
     return record
 
 
-def spent_today(cx, day=None):
+def spent_today(cx, *, day: str | None = None) -> int:
     """What the ledger says has gone today."""
     row = cx.execute("select points from api_usage where day = coalesce(%s::date, current_date)",
                      (day,)).fetchone()
-    if row is None:
-        return 0
-    # db.psql hands out dict rows; a caller with its own factory is not turned
-    # away for it, since this is the one thing the scheduler has to be able to
-    # ask on any connection it has.
-    return row["points"] if isinstance(row, dict) else row[0]
+    return 0 if row is None else row["points"]
 
 
-def daily_allowance(tier=None):
+def daily_allowance(tier: str | None = None) -> int:
     """What the tier in force allows in a day. SPOONACULAR_TIER, or free."""
     name = (tier or os.environ.get("SPOONACULAR_TIER") or "free").strip().lower()
     return TIER_POINTS.get(name, TIER_POINTS["free"])
 
 
-def remaining_points(cx, tier=None, day=None):
+def remaining_points(cx, *, tier: str | None = None, day: str | None = None) -> int:
     """What is left today. A run asks this before it begins.
 
     Never negative: a run that has overspent has nothing to plan with, and
     a negative number only invites arithmetic that reads as if it did.
     """
-    return max(0, daily_allowance(tier) - spent_today(cx, day))
+    return max(0, daily_allowance(tier) - spent_today(cx, day=day))
 
 
-def _points_spent(headers, fallback):
+def _points_spent(headers, fallback: float) -> float:
     """What the service says the call cost, or what to assume when it is silent."""
     raw = headers.get(QUOTA_HEADER) if headers is not None else None
     try:
@@ -251,16 +296,29 @@ def _points_spent(headers, fallback):
         return fallback
 
 
-def _result_count(payload):
-    """How many recipes came back. The fractional charge is per result."""
+def results_of(payload: object) -> list[object] | None:
+    """The recipes out of an answer, or None when it is not a list of them.
+
+    complexSearch answers an object with `results` and findByIngredients
+    answers a bare list; /information answers with one dish and no list at
+    all. That last case is None rather than an empty list, because a search
+    that matched nothing and a single recipe mean opposite things to the two
+    callers here.
+    """
     if isinstance(payload, list):
-        return len(payload)
+        return payload
     if isinstance(payload, dict) and isinstance(payload.get("results"), list):
-        return len(payload["results"])
-    return 1
+        return payload["results"]
+    return None
 
 
-def _joined(values):
+def _result_count(payload) -> int:
+    """How many recipes came back. The fractional charge is per result."""
+    found = results_of(payload)
+    return 1 if found is None else len(found)
+
+
+def _joined(values: str | Iterable[str]) -> str:
     """A comma-separated list, since the pantry arrives here as a list of ours."""
     if isinstance(values, str):
         return values

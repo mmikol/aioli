@@ -20,8 +20,8 @@ It does not buy anything. It will fill a cart one day and show its work; the
 purchase is always a person's click. No credential capable of completing an
 order belongs in the container.
 
-It is not deployed. Every port binds to 127.0.0.1, and `tailscale serve` on
-the host carries a phone to the board.
+It is not deployed. Every port is published on the host's loopback and
+nowhere else, and `tailscale serve` on the host carries a phone to the board.
 
 ## Install
 
@@ -31,7 +31,7 @@ the host carries a phone to the board.
 
 ```bash
 git clone git@github.com:mmikol/aioli.git && cd aioli
-python3.12 -m venv .venv && .venv/bin/pip install -r requirements.txt
+python3.12 -m venv .venv && .venv/bin/pip install -r requirements-dev.txt
 cp .env.example .env        # then put your key in it
 ```
 
@@ -68,6 +68,14 @@ recipes/     the one way out: search, and the steps at the stove
 planner/     the week, and what to buy for it
 board/       the page it is all read and answered on
 ```
+
+Every public function is annotated: a signature another module reads has to
+say what it takes. A private helper is annotated where its shape is not
+obvious beside its caller, and left bare where it is. A connection stays bare - `cx` is the argument nearly
+all of them take and naming its type says nothing - and what comes back from
+a reader is `db.psql.Row`, a psycopg dict row keyed by column name. Comments
+say why rather than what; `db/migrations/001-the-household.sql` is the one to
+copy.
 
 ## Where the work is
 

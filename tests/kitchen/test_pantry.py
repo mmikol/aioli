@@ -7,7 +7,10 @@ import pytest
 
 from kitchen import pantry
 
-TODAY = datetime.date.today()
+# Written down rather than read off the clock, the way every other test
+# module here does it: the code resolves today per call, so a module that
+# snapshotted it at import would pass all day and fail at midnight.
+TODAY = datetime.date(2026, 9, 20)
 
 
 def test_a_perishable_without_a_shelf_life_is_refused():
@@ -27,7 +30,7 @@ def test_a_quantity_stays_the_quantity_it_was_given():
 def test_what_is_in_stock_leaves_out_what_is_gone(db):
     pantry.add_perishable(db, "spinach", 200, "g", 5)
     empty = pantry.add_perishable(db, "milk", 1, "l", 7)
-    pantry.update(db, empty["id"], quantity=0)
+    pantry._update(db, empty["id"], quantity=0)
     pantry.add_staple(db, "rice")
     pantry.add_staple(db, "flour", level="out")
     assert pantry.ingredient_names(db) == ["rice", "spinach"]
@@ -35,7 +38,7 @@ def test_what_is_in_stock_leaves_out_what_is_gone(db):
 
 @pytest.mark.database
 def test_the_names_the_planner_searches_with_are_deduplicated(db):
-    pantry.add_perishable(db, "Chicken thigh", 2, "lb", 3)
+    pantry.add_perishable(db, "Chicken thigh", 2, "lb", 3, acquired_on=TODAY)
     pantry.add_perishable(db, "chicken thigh", 1, "lb", 3,
                           acquired_on=TODAY - datetime.timedelta(days=1))
     # Two lots, one search term: which spelling comes back is not worth an
@@ -46,30 +49,31 @@ def test_the_names_the_planner_searches_with_are_deduplicated(db):
 
 @pytest.mark.database
 def test_what_is_nearest_turning_comes_first(db):
-    pantry.add_perishable(db, "rice pudding", 1, "tub", 30)
-    pantry.add_perishable(db, "spinach", 200, "g", 3)
+    pantry.add_perishable(db, "rice pudding", 1, "tub", 30, acquired_on=TODAY)
+    pantry.add_perishable(db, "spinach", 200, "g", 3, acquired_on=TODAY)
     pantry.add_perishable(db, "beef mince", 500, "g", 10,
                           acquired_on=TODAY - datetime.timedelta(days=8))
-    turning = pantry.turning_soonest(db)
+    turning = pantry.turning_soonest(db, today=TODAY)
     assert [row["ingredient"] for row in turning] == ["beef mince", "spinach", "rice pudding"]
     assert turning[0]["days_left"] == 2
-    assert [row["ingredient"] for row in pantry.turning_soonest(db, within_days=3)] == [
+    assert [row["ingredient"] for row in
+            pantry.turning_soonest(db, within_days=3, today=TODAY)] == [
         "beef mince", "spinach"]
 
 
 @pytest.mark.database
 def test_a_lot_with_no_date_cannot_be_ranked_so_it_is_not_ranked(db):
-    row = pantry.add_perishable(db, "spinach", 200, "g", 3)
-    pantry.update(db, row["id"], shelf_life_days=None)
-    assert pantry.turning_soonest(db) == []
+    row = pantry.add_perishable(db, "spinach", 200, "g", 3, acquired_on=TODAY)
+    pantry._update(db, row["id"], shelf_life_days=None)
+    assert pantry.turning_soonest(db, today=TODAY) == []
     assert pantry.ingredient_names(db) == ["spinach"]
 
 
 @pytest.mark.database
 def test_a_perishable_decrements_and_may_land_on_zero(db):
     pantry.add_perishable(db, "milk", 2, "l", 7)
-    assert pantry.subtract(db, "milk", 0.5, "l")["quantity"] == decimal.Decimal("1.5")
-    assert pantry.subtract(db, "milk", 4, "l")["quantity"] == 0
+    assert pantry.subtract(db, "milk", quantity=0.5, unit="l")["quantity"] == decimal.Decimal("1.5")
+    assert pantry.subtract(db, "milk", quantity=4, unit="l")["quantity"] == 0
     assert pantry.ingredient_names(db) == []
 
 
@@ -91,16 +95,17 @@ def test_a_perishable_used_without_an_amount_is_not_guessed_at(db):
 
 @pytest.mark.database
 def test_a_unit_that_does_not_match_is_not_converted_here(db):
-    # The conversion arrives with the ingredient_product table; assuming one
+    # The household's own factors are `unit_conversion`, and the caller that
+    # holds them applies one before it gets here; assuming one at this depth
     # would subtract a confident wrong number.
     pantry.add_perishable(db, "milk", 2, "l", 7)
     with pytest.raises(ValueError, match="milk"):
-        pantry.subtract(db, "milk", 1, "kg")
+        pantry.subtract(db, "milk", quantity=1, unit="kg")
 
 
 @pytest.mark.database
 def test_subtracting_something_the_house_does_not_hold_is_not_an_error(db):
-    assert pantry.subtract(db, "saffron", 1, "g") is None
+    assert pantry.subtract(db, "saffron", quantity=1, unit="g") is None
     assert pantry.empty(db, "saffron") is None
     assert pantry.correct(db, "saffron", quantity=1) is None
 
@@ -143,7 +148,7 @@ def test_a_correction_sets_rather_than_adjusts(db):
 @pytest.mark.database
 def test_a_thing_can_change_grade_without_moving(db):
     row = pantry.add_staple(db, "parmesan")
-    changed = pantry.update(db, row["id"], grade="perishable", quantity=200, unit="g",
+    changed = pantry._update(db, row["id"], grade="perishable", quantity=200, unit="g",
                             acquired_on=TODAY, shelf_life_days=60, level=None)
     assert changed["id"] == row["id"]
     assert changed["grade"] == "perishable"
@@ -153,7 +158,7 @@ def test_a_thing_can_change_grade_without_moving(db):
 def test_a_row_has_only_the_fields_it_has(db):
     row = pantry.add_staple(db, "rice")
     with pytest.raises(ValueError, match="brand"):
-        pantry.update(db, row["id"], brand="whatever")
+        pantry._update(db, row["id"], brand="whatever")
 
 
 @pytest.mark.database

@@ -11,7 +11,8 @@ from urllib.parse import parse_qsl, urlsplit
 
 import pytest
 
-from recipes import client, fixtures
+from recipes import client
+from tests.recipes import fixtures
 
 # A key shaped like one and belonging to nobody, so the assertions about the
 # key never leaking have something to look for.
@@ -33,6 +34,24 @@ class Answer:
 
     def __exit__(self, *exc):
         return False
+
+
+class Truncated(Answer):
+    """A service that answered and then stopped sending."""
+
+    status = 200
+
+    def read(self):
+        raise ConnectionResetError("the connection went")
+
+
+class Nonsense(Answer):
+    """A service that answered with something that is not a recipe."""
+
+    status = 200
+
+    def read(self):
+        return b"<html>we are down for maintenance</html>"
 
 
 class Opener:
@@ -247,6 +266,31 @@ def test_the_key_is_read_from_the_environment(monkeypatch):
     assert chef.information(9001)["id"] == 9001
 
 
+def test_an_answer_that_could_not_be_read_is_a_refusal_and_not_an_absence():
+    # The service answered and the body arrived truncated. Calling that
+    # "could not be reached" sends somebody to look at their network, which
+    # is the one place the fault is not.
+    chef, _ = wired(Truncated({}))
+    with pytest.raises(client.SpoonacularError) as refused:
+        chef.information(9001)
+    assert client.trouble_of(refused.value) == client.REFUSED
+    assert refused.value.status == 200
+
+
+def test_an_answer_that_is_not_json_is_a_refusal_too():
+    chef, _ = wired(Nonsense({}))
+    with pytest.raises(client.SpoonacularError) as refused:
+        chef.information(9001)
+    assert client.trouble_of(refused.value) == client.REFUSED
+
+
+def test_a_service_that_never_answered_is_the_one_that_is_unreachable():
+    chef, _ = wired(URLError("no route to host"))
+    with pytest.raises(client.SpoonacularError) as refused:
+        chef.information(9001)
+    assert client.trouble_of(refused.value) == client.UNREACHABLE
+
+
 def test_the_default_opener_is_urllib(monkeypatch):
     # The one test that does not inject an opener, so the seam the others use
     # is known to be the seam the real client goes out through.
@@ -274,8 +318,10 @@ def test_a_day_can_be_written_against_a_date_that_is_not_today():
 
 def test_remaining_points_reads_the_ledger(monkeypatch):
     monkeypatch.delenv("SPOONACULAR_TIER", raising=False)
+    # A dict row, because db.psql hands out dict rows and every other reader
+    # in the repo assumes one. A caller with its own row factory hands over a
+    # connection this can read, rather than this guessing at a shape.
     assert client.remaining_points(Cursor({"points": 12})) == 38
-    assert client.remaining_points(Cursor((12,))) == 38
 
 
 def test_a_day_with_no_row_has_the_whole_allowance(monkeypatch):

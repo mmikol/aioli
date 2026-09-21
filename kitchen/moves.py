@@ -15,93 +15,171 @@ here runs off a plan, only off something a person or a confirmed run said.
 """
 import datetime
 import hashlib
+from collections.abc import Iterable
+from dataclasses import dataclass
 
-from kitchen import pantry
+from db.psql import Row
+from kitchen import one_of, pantry
 
 REASONS = ("bought", "cooked", "finished", "discarded", "corrected")
 
-SLOTS = ("lunch", "dinner")
+# The two slots a day of this plan has, named here because `eating_history`
+# is the column they end up in. planner/week.py reads them from here rather
+# than spelling them again (pm/backlog.md: breakfast is out).
+LUNCH, DINNER = "lunch", "dinner"
+SLOTS = (LUNCH, DINNER)
 
 # The cause rides in `note` behind this tag, and the separator is how the
 # tag is read back off. See `_claim`.
 TAG = "cause:"
 SEPARATOR = " - "
 
+# What each writer mints its causes under. The namespace is flat and
+# at-most-once, so one writer claiming another's prefix would spend the key
+# that writer needs: the board refuses a form carrying anything but BOARD
+# (board/pages.py), the planner keys a meal on MEAL, and the scheduler that
+# will key a run on RUN is an item after the MVP (pm/backlog.md).
+BOARD, MEAL, RUN = "board:", "plan_meal:", "run:"
 
-def record(cx, reason, ingredient, quantity=None, unit=None, level=None,
-           shelf_life_days=None, acquired_on=None, note=None, cause=None):
+
+@dataclass(frozen=True)
+class Used:
+    """One ingredient a cook took out of the cupboard.
+
+    This is what crosses board -> planner -> kitchen when a meal is
+    confirmed, and it is a type rather than a dict because it crosses two
+    package boundaries and every other value that does is one. A name on its
+    own is a line nobody knows the amount of, which `cook` also takes as a
+    bare string.
+    """
+    ingredient: str
+    quantity: pantry.Quantity = None
+    unit: str | None = None
+
+
+@dataclass(frozen=True)
+class Cooked:
+    """What recording a meal wrote: the stock that moved, and the eating of it."""
+    moves: list[Row]
+    history: list[Row]
+
+
+def _record(cx, reason: str, ingredient: str, quantity: pantry.Quantity = None,
+            unit: str | None = None, level: str | None = None,
+            shelf_life_days: int | None = None, acquired_on: datetime.date | None = None,
+            grade: str | None = None, note: str | None = None,
+            cause: str | None = None) -> Row | None:
     """Write a move and apply it, both or neither.
+
+    Every optional argument on the five writers below is keyword-only,
+    because their third slot means a quantity in four of them and a note in
+    `finished`, and `discarded(cx, "milk", "turned")` would otherwise reach
+    `decimal.Decimal("turned")`.
 
     The five reasons are what can happen to stock: 'bought' puts it in,
     'cooked' takes some out, 'finished' and 'discarded' say it is gone -
     whether it was eaten is the waste figure - and 'corrected' is the person
     overruling the arithmetic.
 
+    Private, because which of these arguments mean anything depends on which
+    reason is being written: a level belongs to a correction and a shelf life
+    to a shop, and a caller handed all ten has to know the table to know
+    which four are its own. The five named moves below are how the module is
+    written to, and each of them states the list its own reason reads.
+
     `cause` names what asked for this move, and naming it makes the move
     at-most-once: see `_claim`. Returns the stock_move row, or None when the
     cause has already been recorded.
     """
-    if reason not in REASONS:
-        raise ValueError("a reason is one of %s, not %r" % (", ".join(REASONS), reason))
+    one_of(reason, REASONS, "reason")
     if cause is not None:
         _tag(cause)              # checked before anything is opened or written
     with cx.transaction():
         if cause is not None and not _claim(cx, cause):
             return None
-        row = _apply(cx, reason, ingredient, quantity, unit, level,
-                     shelf_life_days, acquired_on)
-        # The ledger records what happened even when the balance had nowhere
-        # to put it - cooking with something never written down is normal, and
-        # the move is the evidence that the pantry is missing a row.
-        return cx.execute(
-            "insert into stock_move (pantry_id, ingredient, quantity, unit, reason, note)"
-            " values (%s, %s, %s, %s, %s, %s) returning *",
-            (row["id"] if row else None, ingredient.strip(), pantry.amount(quantity), unit,
-             reason, _note(cause, note))).fetchone()
+        return _write(cx, reason, ingredient, quantity, unit, _note(cause, note),
+                      level=level, shelf_life_days=shelf_life_days,
+                      acquired_on=acquired_on, grade=grade)
 
 
-def bought(cx, ingredient, quantity=None, unit=None, shelf_life_days=None,
-           acquired_on=None, note=None, cause=None):
-    """A shop happened."""
-    return record(cx, "bought", ingredient, quantity=quantity, unit=unit,
+def _write(cx, reason: str, ingredient: str, quantity: pantry.Quantity,
+           unit: str | None, note: str | None, **balance) -> Row:
+    """One move: the balance moved, and the line of ledger that says it was.
+
+    The only insert into `stock_move` in this module. A single move and a
+    whole meal cannot share a transaction - one claim covers a meal and
+    another covers a move - but the write itself is the same write, and a
+    ledger spelled twice is a ledger that grows a third spelling.
+
+    The line is recorded even when the balance had nowhere to put it: cooking
+    with something never written down is normal, and the move is the evidence
+    that the pantry is missing a row.
+    """
+    row = _apply(cx, reason, ingredient, quantity, unit, **balance)
+    return cx.execute(
+        "insert into stock_move (pantry_id, ingredient, quantity, unit, reason, note)"
+        " values (%s, %s, %s, %s, %s, %s) returning *",
+        (row["id"] if row else None, ingredient.strip(), pantry.amount(quantity), unit,
+         reason, note)).fetchone()
+
+
+def bought(cx, ingredient: str, *, quantity: pantry.Quantity = None, unit: str | None = None,
+           shelf_life_days: int | None = None, acquired_on: datetime.date | None = None,
+           grade: str | None = None, note: str | None = None,
+           cause: str | None = None) -> Row | None:
+    """A shop happened.
+
+    `grade` is what the caller already decided a thing is - a form asks, and
+    the answer should not be re-inferred from whether an amount came with it.
+    Left out, `kitchen.pantry.restock` reads it off the arguments. A first lot
+    of a measured perishable with no shelf life is refused; see `restock`.
+    """
+    return _record(cx, "bought", ingredient, quantity=quantity, unit=unit,
                   shelf_life_days=shelf_life_days, acquired_on=acquired_on,
-                  note=note, cause=cause)
+                  grade=grade, note=note, cause=cause)
 
 
-def cooked(cx, ingredient, quantity=None, unit=None, note=None, cause=None):
+def cooked(cx, ingredient: str, *, quantity: pantry.Quantity = None, unit: str | None = None,
+           note: str | None = None, cause: str | None = None) -> Row | None:
     """One ingredient was cooked with. A whole meal is `cook` below."""
-    return record(cx, "cooked", ingredient, quantity=quantity, unit=unit,
+    return _record(cx, "cooked", ingredient, quantity=quantity, unit=unit,
                   note=note, cause=cause)
 
 
-def finished(cx, ingredient, note=None, cause=None):
+def finished(cx, ingredient: str, *, note: str | None = None,
+             cause: str | None = None) -> Row | None:
     """It is gone, and it was eaten."""
-    return record(cx, "finished", ingredient, note=note, cause=cause)
+    return _record(cx, "finished", ingredient, note=note, cause=cause)
 
 
-def discarded(cx, ingredient, quantity=None, unit=None, note=None, cause=None):
+def discarded(cx, ingredient: str, *, quantity: pantry.Quantity = None, unit: str | None = None,
+              note: str | None = None, cause: str | None = None) -> Row | None:
     """It is gone, and it was thrown away. This is what waste is measured in."""
-    return record(cx, "discarded", ingredient, quantity=quantity, unit=unit,
+    return _record(cx, "discarded", ingredient, quantity=quantity, unit=unit,
                   note=note, cause=cause)
 
 
-def corrected(cx, ingredient, quantity=None, unit=None, level=None, shelf_life_days=None,
-              acquired_on=None, note=None, cause=None):
+def corrected(cx, ingredient: str, *, quantity: pantry.Quantity = None, unit: str | None = None,
+              level: str | None = None, shelf_life_days: int | None = None,
+              acquired_on: datetime.date | None = None, grade: str | None = None,
+              note: str | None = None, cause: str | None = None) -> Row | None:
     """What is actually on the shelf, whatever the arithmetic thinks.
 
     The shelf life is worth passing for a thing the pantry has never heard
     of, since correcting one of those is writing it down for the first time.
     """
-    return record(cx, "corrected", ingredient, quantity=quantity, unit=unit, level=level,
+    return _record(cx, "corrected", ingredient, quantity=quantity, unit=unit, level=level,
                   shelf_life_days=shelf_life_days, acquired_on=acquired_on,
-                  note=note, cause=cause)
+                  grade=grade, note=note, cause=cause)
 
 
-def cook(cx, ingredients, eaten_on=None, slot="dinner", method=None, note=None, cause=None):
+def cook(cx, ingredients: Iterable[str | Used], *, eaten_on: datetime.date | None = None,
+         slot: str = "dinner", method: str | None = None, note: str | None = None,
+         cause: str | None = None) -> Cooked | None:
     """Record a meal as cooked: the stock out, and a line of history in.
 
-    `ingredients` is a sequence of names, or of dicts carrying `ingredient`
-    and, where the amounts are known, `quantity` and `unit`.
+    `ingredients` is a sequence of `Used`, or of bare names where the amounts
+    are not known.
 
     The history is what the variety cooldown reads later. Not "do not repeat
     recipe 4821" but "there has been chicken thigh three times this month",
@@ -110,37 +188,31 @@ def cook(cx, ingredients, eaten_on=None, slot="dinner", method=None, note=None, 
     written and the recipe is not.
 
     The whole meal is one claim under `cause`, so a retry that died half way
-    through does not half-cook it. Returns the moves and the history rows, or
-    None when the meal has already been recorded.
+    through does not half-cook it. Returns what was written, or None when the
+    meal has already been recorded.
     """
-    if slot not in SLOTS:
-        raise ValueError("a slot is one of %s, not %r" % (", ".join(SLOTS), slot))
+    one_of(slot, SLOTS, "slot")
     if cause is not None:
         _tag(cause)
     eaten_on = eaten_on or datetime.date.today()
-    used = [{"ingredient": each} if isinstance(each, str) else dict(each) for each in ingredients]
+    used = [Used(each) if isinstance(each, str) else each for each in ingredients]
     with cx.transaction():
         if cause is not None and not _claim(cx, cause):
             return None
-        moves, history = [], []
+        made, history = [], []
         for each in used:
-            name = each["ingredient"]
-            row = _apply(cx, "cooked", name, each.get("quantity"), each.get("unit"),
-                         None, None, None)
-            moves.append(cx.execute(
-                "insert into stock_move (pantry_id, ingredient, quantity, unit, reason, note)"
-                " values (%s, %s, %s, %s, 'cooked', %s) returning *",
-                (row["id"] if row else None, name.strip(), pantry.amount(each.get("quantity")),
-                 each.get("unit"), _note(cause, note))).fetchone())
+            made.append(_write(cx, "cooked", each.ingredient, each.quantity,
+                               each.unit, _note(cause, note)))
             history.append(cx.execute(
                 "insert into eating_history (eaten_on, slot, ingredient, method)"
                 " values (%s, %s, %s, %s) returning *",
-                (eaten_on, slot, name.strip(), method)).fetchone())
-        return {"moves": moves, "history": history}
+                (eaten_on, slot, each.ingredient.strip(), method)).fetchone())
+        return Cooked(made, history)
 
 
-def recent(cx, limit=50, ingredient=None):
-    """The ledger, newest first: what the board shows and the mails read."""
+def recent(cx, *, limit: int = 50, ingredient: str | None = None) -> list[Row]:
+    """The ledger, newest first. The board's history view and the midweek mail
+    are both after-MVP items (pm/backlog.md)."""
     if ingredient is None:
         return cx.execute("select * from stock_move order by happened_at desc, id desc limit %s",
                           (limit,)).fetchall()
@@ -149,14 +221,17 @@ def recent(cx, limit=50, ingredient=None):
         " order by happened_at desc, id desc limit %s", (ingredient.strip(), limit)).fetchall()
 
 
-def caused_by(cx, cause):
+def caused_by(cx, cause: str) -> list[Row]:
     """Every move a cause has already made: what makes a retry safe."""
     return cx.execute(
         "select * from stock_move where split_part(note, %s, 1) = %s order by id",
         (SEPARATOR, TAG + cause)).fetchall()
 
 
-def _apply(cx, reason, ingredient, quantity, unit, level, shelf_life_days, acquired_on):
+def _apply(cx, reason: str, ingredient: str, quantity: pantry.Quantity, unit: str | None,
+           level: str | None = None, shelf_life_days: int | None = None,
+           acquired_on: datetime.date | None = None,
+           grade: str | None = None) -> Row | None:
     """Move the balance the way this reason moves it.
 
     'discarded' with a quantity is a part of a thing binned and the rest kept;
@@ -165,7 +240,8 @@ def _apply(cx, reason, ingredient, quantity, unit, level, shelf_life_days, acqui
     """
     if reason == "bought":
         return pantry.restock(cx, ingredient, quantity=quantity, unit=unit,
-                              shelf_life_days=shelf_life_days, acquired_on=acquired_on)
+                              shelf_life_days=shelf_life_days, acquired_on=acquired_on,
+                              grade=grade)
     if reason == "cooked":
         return pantry.subtract(cx, ingredient, quantity=quantity, unit=unit)
     if reason == "finished":
@@ -176,14 +252,16 @@ def _apply(cx, reason, ingredient, quantity, unit, level, shelf_life_days, acqui
         return pantry.subtract(cx, ingredient, quantity=quantity, unit=unit)
     # A correction about a thing that was never written down is a thing being
     # written down. That is how the pantry fills as the board is used.
-    row = pantry.correct(cx, ingredient, quantity=quantity, unit=unit, level=level)
+    row = pantry.correct(cx, ingredient, quantity=quantity, unit=unit, level=level,
+                         grade=grade)
     if row is None:
         row = pantry.restock(cx, ingredient, quantity=quantity, unit=unit,
-                             shelf_life_days=shelf_life_days, acquired_on=acquired_on)
+                             shelf_life_days=shelf_life_days, acquired_on=acquired_on,
+                             grade=grade)
     return row
 
 
-def _claim(cx, cause):
+def _claim(cx, cause: str) -> bool:
     """Take a cause at most once. True when this call is the one that got it.
 
     The scheduler retries. A run that died between the API call and the commit
@@ -208,7 +286,7 @@ def _claim(cx, cause):
     return seen is None
 
 
-def _tag(cause):
+def _tag(cause: str) -> str:
     """The cause as it appears in a note."""
     if SEPARATOR in cause:
         raise ValueError("a cause may not contain %r: it separates the tag from the note"
@@ -216,14 +294,14 @@ def _tag(cause):
     return TAG + cause
 
 
-def _note(cause, note):
+def _note(cause: str | None, note: str | None) -> str | None:
     """A note with its cause in front, so the ledger says what asked for it."""
     if cause is None:
         return note
     return _tag(cause) if note is None else _tag(cause) + SEPARATOR + note
 
 
-def _lock_key(cause):
+def _lock_key(cause: str) -> int:
     """A cause as the bigint an advisory lock wants.
 
     Hashed in Python rather than by the database, so the key is the same

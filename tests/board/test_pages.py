@@ -6,9 +6,10 @@ import decimal
 
 import pytest
 
-from board import pages, serve
+from board import chrome, pages, serve
 from kitchen import moves, pantry, settings
-from recipes import client, fixtures, steps
+from recipes import client, steps
+from tests.recipes import fixtures
 
 TODAY = datetime.date(2026, 9, 20)
 
@@ -90,17 +91,17 @@ def _meal(db, plan, day, slot="dinner", kind="cook", servings=2, **fields):
 def test_a_quantity_reads_the_way_a_person_wrote_it():
     # 2.000 kg of potatoes is a column's precision showing through, not
     # something anybody typed.
-    assert pages._figure(decimal.Decimal("2.000")) == "2"
-    assert pages._figure(decimal.Decimal("0.50")) == "0.5"
-    assert pages._figure(decimal.Decimal("1E+2")) == "100"
-    assert pages._figure(None) == ""
+    assert chrome.figure(decimal.Decimal("2.000")) == "2"
+    assert chrome.figure(decimal.Decimal("0.50")) == "0.5"
+    assert chrome.figure(decimal.Decimal("1E+2")) == "100"
+    assert chrome.figure(None) == ""
 
 
 def test_a_date_is_said_the_way_it_is_asked_about():
-    assert pages._said(TODAY, TODAY)[1] == "today"
-    assert pages._said(TODAY - datetime.timedelta(days=1), TODAY)[1] == "yesterday"
-    assert pages._said(TODAY - datetime.timedelta(days=3), TODAY)[1] == "3 days ago"
-    assert pages._said(TODAY, TODAY)[0] == "sunday 20 september"
+    assert chrome.said(TODAY, TODAY)[1] == "today"
+    assert chrome.said(TODAY - datetime.timedelta(days=1), TODAY)[1] == "yesterday"
+    assert chrome.said(TODAY - datetime.timedelta(days=3), TODAY)[1] == "3 days ago"
+    assert chrome.said(TODAY, TODAY)[0] == "sunday 20 september"
 
 
 def test_turning_is_counted_and_never_guessed():
@@ -118,9 +119,9 @@ def test_a_marked_state_is_marked_inside_itself():
     # `.row .state` is the more specific rule in board.css, so `soon` on the
     # same element would be overruled and the marking would silently do
     # nothing. It goes inside, which restyles nothing.
-    assert pages._state("turns today", True) == (
+    assert chrome.state("turns today", True) == (
         "<span class='state'><span class='soon'>turns today</span></span>")
-    assert pages._state("in stock") == "<span class='state'>in stock</span>"
+    assert chrome.state("in stock") == "<span class='state'>in stock</span>"
 
 
 def test_two_lots_of_a_thing_are_one_line_showing_the_older():
@@ -132,22 +133,22 @@ def test_two_lots_of_a_thing_are_one_line_showing_the_older():
 
 
 def test_a_blank_box_and_an_absent_one_are_the_same_absence():
-    assert pages._one(_q(unit="  g "), "unit") == "g"
-    assert pages._one({}, "unit") == ""
-    assert pages._one({}, "grade", "staple") == "staple"
-    assert pages._many(_q(cook_days=["sunday", " ", "wednesday"]), "cook_days") == [
+    assert chrome.one(_q(unit="  g "), "unit") == "g"
+    assert chrome.one({}, "unit") == ""
+    assert chrome.one({}, "grade", "staple") == "staple"
+    assert chrome.many(_q(cook_days=["sunday", " ", "wednesday"]), "cook_days") == [
         "sunday", "wednesday"]
 
 
 def test_a_field_that_will_not_parse_blames_the_field():
     with pytest.raises(ValueError, match="the shelf life"):
-        pages._whole("soon", "the shelf life")
+        chrome.whole("soon", "the shelf life")
     with pytest.raises(ValueError, match="cannot be less than"):
-        pages._whole("0", "how many the meals are for", 1)
+        chrome.whole("0", "how many the meals are for", 1)
     with pytest.raises(ValueError, match="the quantity"):
-        pages._measure("a bag", "the quantity")
+        chrome.measure("a bag", "the quantity")
     with pytest.raises(ValueError, match="2026-09-20"):
-        pages._date("last tuesday", "the date it came in")
+        chrome.date("last tuesday", "the date it came in")
 
 
 def test_every_route_is_one_the_board_does_not_already_answer():
@@ -159,6 +160,32 @@ def test_every_route_is_one_the_board_does_not_already_answer():
     assert len({(route.path, route.method) for route in pages.ROUTES}) == len(pages.ROUTES)
     assert all(callable(route.render) for route in pages.ROUTES)
     assert all(route.method in ("GET", "POST") for route in pages.ROUTES)
+
+
+@pytest.mark.database
+def test_the_grade_the_form_chose_is_the_grade_that_is_booked_in(db):
+    # A name the house once held as a perishable and has since finished:
+    # adding it back as a staple is the household saying what it is, and the
+    # arithmetic re-inferring a perishable from the absence of a quantity
+    # would refuse the form with "a perishable is measured".
+    spent = pantry.add_perishable(db, "notional rice", 1, "kg", 90, acquired_on=TODAY)
+    pantry._update(db, spent["id"], quantity=0)
+    pages.pantry_edit(db, _q(do="add", ingredient="notional rice", grade="staple",
+                             how="found", cause=pages._cause("pantry")))
+    assert pantry.find(db, "notional rice")["grade"] == "staple"
+
+
+@pytest.mark.database
+def test_a_cause_the_board_did_not_mint_is_refused(db):
+    # Causes are one flat at-most-once namespace, so a form carrying
+    # 'plan_meal:184' would claim the key a confirmation needs and leave that
+    # meal marked cooked with nothing taken out of the pantry.
+    pantry.add_staple(db, "rice")
+    page = pages.pantry_edit(db, _q(ingredient="rice", do="finished",
+                                    cause="plan_meal:184"))
+    assert "did not come from a form on this board" in page
+    assert pantry.find(db, "rice")["level"] == "in_stock"
+    assert moves.caused_by(db, "plan_meal:184") == []
 
 
 @pytest.mark.database
@@ -439,7 +466,7 @@ def test_the_settings_refuse_a_verb_they_do_not_have(db):
 def test_with_no_week_the_confirmations_say_so_rather_than_showing_nothing(db):
     html = pages.confirm_page(db, {}, today=TODAY)
     assert "the week is not planned yet" in html
-    assert pages.awaiting(db, TODAY) == []
+    assert pages.to_confirm(db, TODAY) == []
 
 
 @pytest.mark.database
@@ -449,7 +476,7 @@ def test_only_the_meals_already_behind_are_questions(db):
     today = _meal(db, plan, TODAY, slot="lunch")
     _meal(db, plan, TODAY + datetime.timedelta(days=2))          # thursday, not yet
     _meal(db, plan, TODAY - datetime.timedelta(days=40))         # long past asking
-    asked = pages.awaiting(db, TODAY)
+    asked = pages.to_confirm(db, TODAY)
     assert [meal.id for meal in asked] == [yesterday["id"], today["id"]]
 
 
@@ -459,7 +486,7 @@ def test_a_meal_already_answered_is_not_asked_about_again(db):
     _meal(db, plan, TODAY, cooked_at=datetime.datetime(2026, 9, 20, 19, 0))
     _meal(db, plan, TODAY, slot="lunch", kind=None, servings=0, skipped=True)
     waiting = _meal(db, plan, TODAY - datetime.timedelta(days=1))
-    assert [meal.id for meal in pages.awaiting(db, TODAY)] == [waiting["id"]]
+    assert [meal.id for meal in pages.to_confirm(db, TODAY)] == [waiting["id"]]
 
 
 @pytest.mark.database
@@ -468,7 +495,7 @@ def test_an_empty_slot_is_not_a_question_with_an_answer(db):
     # Tuesday - but asking whether it was cooked has no true answer.
     plan = _plan(db)
     _meal(db, plan, TODAY, kind=None, servings=0)
-    assert pages.awaiting(db, TODAY) == []
+    assert pages.to_confirm(db, TODAY) == []
     assert "nothing is waiting on an answer" in pages.confirm_page(db, {}, today=TODAY)
 
 
@@ -479,7 +506,7 @@ def test_a_week_that_is_over_or_was_never_filled_is_not_asked_about(db):
     _meal(db, closed, TODAY - datetime.timedelta(days=7))
     unfilled = _plan(db, state="unfilled", period="2026-W37")
     _meal(db, unfilled, TODAY - datetime.timedelta(days=2))
-    assert pages.awaiting(db, TODAY) == []
+    assert pages.to_confirm(db, TODAY) == []
 
 
 @pytest.mark.database
@@ -521,7 +548,7 @@ def test_answering_yes_writes_the_answer_to_the_plan(db):
     pages.confirm_answer(db, _q(meal=meal["id"], answer="cooked"))
     answered = db.execute("select * from plan_meal where id = %s", (meal["id"],)).fetchone()
     assert answered["cooked_at"] is not None
-    assert pages.awaiting(db, TODAY) == []
+    assert pages.to_confirm(db, TODAY) == []
 
 
 @pytest.mark.database
@@ -555,7 +582,7 @@ def test_a_cook_with_no_pointer_left_is_answered_and_subtracts_nothing(db):
     pages.confirm_answer(db, _q(meal=meal["id"], answer="cooked"))
     assert pantry.find(db, "spinach")["quantity"] == 200
     assert moves.recent(db) == []
-    assert pages.awaiting(db, TODAY) == []
+    assert pages.to_confirm(db, TODAY) == []
 
 
 @pytest.mark.database
@@ -581,7 +608,7 @@ def test_confirming_a_cook_moves_the_stock_its_method_names(db, monkeypatch):
     # How it was cooked is the keeps-well rules' column and nothing here
     # classifies one yet; the recipe's own title is not the answer.
     assert {row["method"] for row in eaten} == {None}
-    assert pages.awaiting(db, TODAY) == []
+    assert pages.to_confirm(db, TODAY) == []
 
 
 @pytest.mark.database
@@ -614,7 +641,7 @@ def test_a_cook_whose_method_cannot_be_had_is_not_marked_done(db, monkeypatch):
     assert db.execute("select cooked_at from plan_meal where id = %s",
                       (meal["id"],)).fetchone()["cooked_at"] is None
     assert pantry.find(db, "notional chickpeas")["quantity"] == 2
-    assert [each.id for each in pages.awaiting(db, TODAY)] == [meal["id"]]
+    assert [each.id for each in pages.to_confirm(db, TODAY)] == [meal["id"]]
 
 
 @pytest.mark.database
@@ -645,7 +672,7 @@ def test_a_superseded_draft_does_not_ask_about_the_same_dinner_twice(db):
     eaten = _meal(db, live, TODAY)
     draft = _plan(db, state="draft")
     _meal(db, draft, TODAY)
-    assert [meal.id for meal in pages.awaiting(db, TODAY)] == [eaten["id"]]
+    assert [meal.id for meal in pages.to_confirm(db, TODAY)] == [eaten["id"]]
 
 
 @pytest.mark.database
@@ -654,7 +681,7 @@ def test_with_no_live_plan_the_newest_draft_is_the_one_asked_about(db):
     _meal(db, older, TODAY)
     newer = _plan(db, state="draft")
     asked = _meal(db, newer, TODAY)
-    assert [meal.id for meal in pages.awaiting(db, TODAY)] == [asked["id"]]
+    assert [meal.id for meal in pages.to_confirm(db, TODAY)] == [asked["id"]]
 
 
 @pytest.mark.database
@@ -672,7 +699,7 @@ def test_a_board_ahead_of_its_database_still_opens(db):
     # The one view a phone opens should not be the one that falls over when
     # the image and the database disagree; the healthcheck is what says so.
     db.execute("drop table plan_meal")
-    assert pages.awaiting(db, TODAY) == []
+    assert pages.to_confirm(db, TODAY) == []
     assert "the week is not planned yet" in pages.confirm_page(db, {}, today=TODAY)
 
 
@@ -706,5 +733,5 @@ def test_every_view_renders_a_whole_page_that_links_to_the_others(db):
         # Every other view is one tap away, and the page does not link to
         # itself: a phone has no back button worth using.
         assert "href='%s'" % path not in html
-        for other, _ in pages.NAV:
+        for other, _ in chrome.NAV:
             assert other == path or "href='%s'" % other in html

@@ -1,6 +1,8 @@
 """The join, and the questions it asks rather than the guesses it does not."""
 import pytest
 
+from kitchen import pantry
+from matching import ingredients
 from matching.ingredients import (
     CONFIDENT,
     UNCONFIRMED,
@@ -94,16 +96,36 @@ def test_a_name_the_house_already_uses_is_certain():
 
 def test_a_confirmed_alias_is_certain_and_a_fresh_one_is_not():
     confirmed = alias_index([remember("2 cups diced tomatoes", "tomatoes, tinned")])
-    match = resolve("2 cups diced tomatoes", NAMES, confirmed)
+    match = resolve("2 cups diced tomatoes", NAMES, aliases=confirmed)
     assert match.ingredient == "tomatoes, tinned"
     assert match.confidence == 1.0
     assert not match.needs_confirmation
 
     guessed = alias_index([remember("passata", "tomatoes, tinned", confirmed=False)])
-    match = resolve("passata", NAMES, guessed)
+    match = resolve("passata", NAMES, aliases=guessed)
     assert match.ingredient == "tomatoes, tinned"
     assert match.confidence == UNCONFIRMED
     assert match.needs_confirmation
+
+
+def test_the_matcher_and_the_kitchen_spell_the_pantry_the_same_way():
+    # matching/ reads no database and takes its rows from whoever holds one,
+    # so it names the two grades and the three levels itself rather than
+    # importing the kitchen for them. This is what stops the two drifting.
+    assert ingredients.GRADES == pantry.GRADES
+    assert ingredients.LEVELS == pantry.LEVELS
+
+
+def test_an_alias_naming_something_the_house_no_longer_holds_is_stepped_over():
+    # An alias row outlives what it points at: a name corrected on the board,
+    # a thing the household stopped buying. Answering with it would hand a
+    # caller a name the pantry has no row under, and `cover` subscripts the
+    # answer.
+    gone = alias_index([remember("2 cups diced tomatoes", "tomatoes, jarred")])
+    match = resolve("2 cups diced tomatoes", NAMES, aliases=gone)
+    assert match.ingredient != "tomatoes, jarred"
+    assert match.source != "alias"
+    assert match.ingredient is None or match.ingredient in NAMES
 
 
 def test_a_fuzzy_match_carries_its_candidates_and_asks():

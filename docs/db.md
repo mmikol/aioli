@@ -44,26 +44,38 @@ never seen before.
 
 ## The tables
 
+What the migrations have built:
+
 | table | holds |
 | --- | --- |
 | `settings` | one row per household fact - size, budget envelope, diet, cook cadence - each with its value and where it came from |
+| `dietary_rule` | what will not be eaten, as a diet, an intolerance or a dislike |
 | `equipment` | what is in the kitchen, so a recipe wanting a pan that is not there can be dropped |
 | `pantry` | what is in the house, in two grades: a perishable with quantity, unit, acquired and shelf life; a staple with only in-stock or low |
 | `stock_move` | every change to the pantry: bought, cooked, finished, discarded, with what caused it |
-| `price_book` | store, brand, product as labelled, pack size, price, sale price, sale until |
-| `ingredient_product` | the fuzzy join: an ingredient as a recipe words it, the product it resolves to, the conversion between their units, and whether a person confirmed it |
-| `budget_period` | the envelope for a month, what has been spent against it, what rolls forward |
+| `ingredient_alias` | a wording this house has answered for, digested, and the ingredient it means |
+| `unit_conversion` | the factors only the household or the ingredient can supply - what a cup of a particular thing weighs |
 | `plan` | a period, its state, and the run that produced it |
 | `plan_meal` | a date, a slot, servings, the pairing, whether it was skipped or cooked, and the live recipe pointer |
 | `eating_history` | what was actually eaten, by ingredient and method - what variety reads |
+| `run` | the scheduler's ledger: job, the period it covers, started, finished, outcome |
+| `api_usage` | points spent per day, so a run can know before it starts whether it can finish. The one table here that is not the household's own record: it is what we spent at somebody else's service |
+
+Twelve tables, in three numbered migrations, migrating as it goes.
+
+What the design expects and nothing has built yet, listed so the shape is
+known before the columns arrive (pm/backlog.md holds the order):
+
+| table | would hold |
+| --- | --- |
+| `price_book` | store, brand, product as labelled, pack size, price, sale price, sale until |
+| `ingredient_product` | the product an ingredient resolves to, the conversion between their units, and whether a person confirmed it |
+| `budget_period` | the envelope for a month, what has been spent against it, what rolls forward |
 | `keeps_well` | the rules over ingredient and method, and the corrections made when a pairing went badly |
 | `grocery_line` | what to buy, at which store, in which pack, for which plan |
 | `event` | cook sessions and shop trips: when, how long, which `.ics` |
-| `run` | the scheduler's ledger: job, the period it covers, started, finished, outcome |
-| `api_usage` | points spent per day, so a run can know before it starts whether it can finish |
 
-Fifteen tables, numbered SQL migrations, migrating as it goes. Nothing above
-is final; the line above it is.
+Nothing in either table above is final; the line above them is.
 
 ## What this costs
 

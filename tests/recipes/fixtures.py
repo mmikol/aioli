@@ -43,7 +43,7 @@ def _ingredient(ingredient_id, name, amount, unit, original, aisle):
     return {
         "id": ingredient_id,
         "aisle": aisle,
-        "image": f"https://example.invalid/{name.replace(' ', '-')}.jpg",
+        "image": "https://example.invalid/%s.jpg" % name.replace(" ", "-"),
         "name": name,
         "amount": amount,
         "unit": unit,
@@ -235,33 +235,33 @@ def shape_errors(expected, actual, path="$"):
         return []
     if isinstance(expected, dict):
         if not isinstance(actual, dict):
-            return [f"{path}: expected an object, got {_name(actual)}"]
+            return ["%s: expected an object, got %s" % (path, _name(actual))]
         found = []
         for key, value in expected.items():
             if key not in actual:
-                found.append(f"{path}.{key}: missing")
+                found.append("%s.%s: missing" % (path, key))
                 continue
-            found.extend(shape_errors(value, actual[key], f"{path}.{key}"))
+            found.extend(shape_errors(value, actual[key], "%s.%s" % (path, key)))
         return found
     if isinstance(expected, list):
         if not isinstance(actual, list):
-            return [f"{path}: expected a list, got {_name(actual)}"]
+            return ["%s: expected a list, got %s" % (path, _name(actual))]
         if not expected or not actual:
             return []
         # One of each is enough to catch a rename, and cheap enough to run over
         # a live answer while someone waits for it.
-        return shape_errors(expected[0], actual[0], f"{path}[0]")
+        return shape_errors(expected[0], actual[0], "%s[0]" % path)
     if isinstance(expected, bool):
-        return [] if isinstance(actual, bool) else [f"{path}: expected a boolean,"
-                                                    f" got {_name(actual)}"]
+        return ([] if isinstance(actual, bool)
+                else ["%s: expected a boolean, got %s" % (path, _name(actual))])
     if isinstance(expected, int | float):
         # int against float is not a difference worth failing a week's plan
         # over; the service returns whichever the number happens to be.
         ok = isinstance(actual, int | float) and not isinstance(actual, bool)
-        return [] if ok else [f"{path}: expected a number, got {_name(actual)}"]
+        return [] if ok else ["%s: expected a number, got %s" % (path, _name(actual))]
     if isinstance(expected, str):
-        return [] if isinstance(actual, str) else [f"{path}: expected a string,"
-                                                   f" got {_name(actual)}"]
+        return ([] if isinstance(actual, str)
+                else ["%s: expected a string, got %s" % (path, _name(actual))])
     return []
 
 

@@ -118,17 +118,32 @@ class RecipeIngredient:
     unit: str | None = None
 
 
+# The pantry's two grades and a staple's three levels, spelled here as well.
+# Not imported from kitchen/pantry.py: this module reads no database and takes
+# its rows from whoever holds one, and importing the kitchen to name two
+# strings would cost it that. tests/matching asserts the two spellings are
+# equal, so a rename on either side fails loudly rather than quietly.
+PERISHABLE = "perishable"
+STAPLE = "staple"
+GRADES = (PERISHABLE, STAPLE)
+IN_STOCK, LOW, OUT = "in_stock", "low", "out"
+LEVELS = (IN_STOCK, LOW, OUT)
+
+
 @dataclass(frozen=True)
 class PantryItem:
     """One row of the pantry, in the household's own words.
 
     A perishable carries a quantity and a unit; a staple carries a level and
     nothing more, because nobody weighs their rice.
+
+    `grade` is one of GRADES and `level` one of LEVELS above, which are
+    kitchen/pantry.py's own vocabularies.
     """
     ingredient: str
     quantity: float | None = None
     unit: str | None = None
-    grade: str = "perishable"
+    grade: str = PERISHABLE
     level: str | None = None
 
 
@@ -256,8 +271,8 @@ def alias_index(aliases: Iterable[Alias | Mapping[str, object]]) -> dict[str, Al
     return index
 
 
-def resolve(wording: str, household: Iterable[str],
-            aliases: Mapping[str, Alias] | None = None, *,
+def resolve(wording: str, household: Iterable[str], *,
+            aliases: Mapping[str, Alias] | None = None,
             cutoff: float = FUZZY_CUTOFF, limit: int = 3) -> Match:
     """Which household ingredient a recipe's wording means.
 
@@ -267,6 +282,13 @@ def resolve(wording: str, household: Iterable[str],
     A confirmed alias and an exact name are certain; anything else comes
     back with a confidence under CONFIDENT and its candidates - the board's
     cue to ask, not the planner's cue to subtract.
+
+    An alias is only an answer while the house still holds what it names. A
+    row survives the ingredient it points at - a name corrected on the board,
+    a thing the household stopped buying - and the answer was still handed
+    back as certain, which put `cover` on a name it then subscripted the
+    pantry with. So an alias nothing on the shelf answers is stepped over and
+    the wording is matched on its own merits.
     """
     name = normalise_name(wording)
     index: dict[str, str] = {}
@@ -274,7 +296,7 @@ def resolve(wording: str, household: Iterable[str],
         index.setdefault(normalise_name(own), own)
 
     known = (aliases or {}).get(alias_key(wording))
-    if known is not None:
+    if known is not None and known.ingredient in index.values():
         confidence = 1.0 if known.confirmed else UNCONFIRMED
         return Match(known.ingredient, confidence, "alias", ((known.ingredient, confidence),))
 
@@ -324,7 +346,7 @@ def cover(needs: Iterable[RecipeIngredient], pantry: Iterable[PantryItem], *,
     for need in needs:
         wanted = parse_quantity(need.quantity)
         unit = normalise_unit(need.unit)
-        match = resolve(need.wording, held.keys(), aliases, cutoff=cutoff)
+        match = resolve(need.wording, held.keys(), aliases=aliases, cutoff=cutoff)
 
         if match.ingredient is None:
             # Nothing in the cupboard is even close, so this is a thing to
@@ -340,13 +362,13 @@ def cover(needs: Iterable[RecipeIngredient], pantry: Iterable[PantryItem], *,
             continue
 
         rows = held[match.ingredient]
-        staples = [r for r in rows if r.grade == "staple"]
+        staples = [row for row in rows if row.grade == STAPLE]
         if staples:
             # A staple has no quantity to subtract, by design: the question
             # a staple answers is whether to buy more, not how much is left.
-            level = staples[0].level or "in_stock"
+            level = staples[0].level or IN_STOCK
             line = Need(need.wording, match, wanted, unit, reason="a staple, %s" % level)
-            (missing if level == "out" else covered).append(line)
+            (missing if level == OUT else covered).append(line)
             continue
 
         if unit is None:
@@ -368,7 +390,7 @@ def cover(needs: Iterable[RecipeIngredient], pantry: Iterable[PantryItem], *,
             if not moved:
                 refusal = moved
                 break
-            total += moved.quantity or 0.0
+            total += moved.quantity
         if refusal is not None:
             uncertain.append(Need(need.wording, match, wanted, unit, reason=refusal.reason))
             continue

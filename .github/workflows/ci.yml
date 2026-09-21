@@ -1,9 +1,16 @@
 # Lint and test on every push to main and every pull request.
 #
-# CI has no database and no API key, so what runs here is ruff plus every
-# test that needs neither. Tests marked `database` skip themselves when
-# AIOLI_NO_DATABASE is set; tests marked `contract` call the real
-# Spoonacular API and never run here at all.
+# CI runs the whole suite against a real PostgreSQL, because the half that
+# needs one is the ledger, the pantry, the planner and the board - the half
+# where being wrong costs a household its week. The service container below
+# is the same image the compose stack runs, and the suite migrates a schema
+# of its own inside a transaction it throws away, so no state carries between
+# runs. Tests marked `contract` call the real Spoonacular API and never run
+# here: there is no key, and a wasted point is a real cost.
+#
+# A developer without the stack up still gets skips rather than a wall of
+# errors - tests/conftest.py skips when it cannot connect, and
+# AIOLI_NO_DATABASE says so out loud.
 
 name: ci
 
@@ -15,8 +22,25 @@ on:
 jobs:
   lint-and-test:
     runs-on: ubuntu-latest
+
+    services:
+      db:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: aioli
+          POSTGRES_PASSWORD: aioli
+          POSTGRES_DB: aioli
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U aioli -d aioli"
+          --health-interval 2s
+          --health-timeout 3s
+          --health-retries 30
+
     env:
-      AIOLI_NO_DATABASE: "1"
+      AIOLI_DATABASE_URL: postgresql://aioli:aioli@127.0.0.1:5432/aioli
+
     steps:
       - uses: actions/checkout@v4
 
@@ -26,10 +50,10 @@ jobs:
           cache: pip
 
       - name: Install dependencies
-        run: pip install -r requirements.txt
+        run: pip install -r requirements-dev.txt
 
       - name: Lint (ruff)
         run: python -m ruff check .
 
-      - name: Tests (database and contract tests skip themselves)
-        run: python -m pytest -q -rs -m "not contract" --cov --cov-fail-under=0
+      - name: Tests (the contract test excepted, which needs a key)
+        run: python -m pytest -q -rs -m "not contract" --cov

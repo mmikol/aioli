@@ -11,8 +11,19 @@ arriving from another agent is a change of `source` and not a migration.
 So a reader reads the value and a writer says who said so.
 
 Every function takes a connection from db.psql.connect, whose rows are dicts.
+
+Every reader that answers a number or a day list raises ValueError when the
+stored text will not parse, naming the key and what it holds. A setting is
+typed into a form, so a typo is a fact about the row rather than about the
+caller: it is said rather than guessed at, and both callers that could meet
+one - planner/week.plan and the settings page - catch it and show it.
 """
 import datetime
+from collections.abc import Iterable
+from dataclasses import dataclass
+
+from db.psql import Row
+from kitchen import one_of
 
 # What a household gets before it has said anything. These are not rows: a
 # default that wrote itself into the table would be indistinguishable from a
@@ -40,7 +51,23 @@ SOURCES = ("user", "default", "agent")
 KINDS = ("diet", "intolerance", "dislike")
 
 
-def get(cx, key, default=None):
+@dataclass(frozen=True)
+class RecipeFilters:
+    """What will not be eaten, in the three parameters the search takes.
+
+    A record rather than a kwargs bag, because the planner reads the three
+    fields one at a time into a call that names them itself, and every other
+    result that crosses a package boundary here is a frozen dataclass.
+
+    `diet` is one string because the API takes one, and it is None rather than
+    empty so a caller drops the parameter instead of sending a blank.
+    """
+    diet: str | None
+    intolerances: list[str]
+    exclude_ingredients: list[str]
+
+
+def get(cx, key: str, *, default: str | None = None) -> str | None:
     """The value for a key, as text. A missing row is not an error.
 
     The source is deliberately not consulted: a figure is worth the same
@@ -54,7 +81,7 @@ def get(cx, key, default=None):
     return DEFAULTS.get(key) if default is None else default
 
 
-def origin(cx, key):
+def origin(cx, key: str) -> str:
     """Who said so: 'user', 'agent', or 'default' when nobody has.
 
     This is the one place the source matters - the board showing where a
@@ -65,10 +92,9 @@ def origin(cx, key):
     return row["source"] if row is not None else "default"
 
 
-def put(cx, key, value, source="user"):
+def put(cx, key: str, value: object, *, source: str = "user") -> Row:
     """State a fact. `source` says who did, and it is not always a person."""
-    if source not in SOURCES:
-        raise ValueError("a source is one of %s, not %r" % (", ".join(SOURCES), source))
+    one_of(source, SOURCES, "source")
     return cx.execute(
         "insert into settings (key, value, source, updated_at)"
         " values (%s, %s, %s, now())"
@@ -77,12 +103,12 @@ def put(cx, key, value, source="user"):
         (key, str(value), source)).fetchone()
 
 
-def forget(cx, key):
+def forget(cx, key: str) -> bool:
     """Drop a stated fact. The key goes back on its default."""
     return cx.execute("delete from settings where key = %s", (key,)).rowcount > 0
 
 
-def stated(cx):
+def stated(cx) -> list[Row]:
     """Every fact the household has actually stated, newest first.
 
     Not the same as what a reader gets: the defaults above answer for the
@@ -91,7 +117,7 @@ def stated(cx):
     return cx.execute("select * from settings order by updated_at desc, key").fetchall()
 
 
-def _number(cx, key):
+def _number(cx, key: str) -> int:
     """A setting read as a whole number, blaming the key when it will not."""
     value = get(cx, key)
     try:
@@ -100,22 +126,22 @@ def _number(cx, key):
         raise ValueError("setting %s is not a number: %r" % (key, value)) from None
 
 
-def household_size(cx):
+def household_size(cx) -> int:
     """How many a meal cooks for. One, until someone says otherwise."""
     return _number(cx, "household_size")
 
 
-def max_ready_minutes_weeknight(cx):
+def max_ready_minutes_weeknight(cx) -> int:
     """How long a cook may take on a working evening."""
     return _number(cx, "max_ready_minutes_weeknight")
 
 
-def max_ready_minutes_weekend(cx):
+def max_ready_minutes_weekend(cx) -> int:
     """How long a cook may take when the afternoon is free."""
     return _number(cx, "max_ready_minutes_weekend")
 
 
-def max_ready_minutes(cx, day):
+def max_ready_minutes(cx, day: datetime.date) -> int:
     """The cap for a given date: the number the search filters on.
 
     A Saturday afternoon and a Tuesday evening are not the same amount of
@@ -128,17 +154,17 @@ def max_ready_minutes(cx, day):
     return max_ready_minutes_weeknight(cx)
 
 
-def cook_sessions_per_week(cx):
+def cook_sessions_per_week(cx) -> int:
     """How many times the week's cooking is grouped into."""
     return _number(cx, "cook_sessions_per_week")
 
 
-def shop_trips_per_week(cx):
+def shop_trips_per_week(cx) -> int:
     """How many times the week's buying is grouped into."""
     return _number(cx, "shop_trips_per_week")
 
 
-def days(value):
+def days(value: object) -> list[str]:
     """A comma-separated day list, lowercased, deduplicated and in week order.
 
     An unknown day is raised rather than dropped: a typo that silently
@@ -157,47 +183,46 @@ def days(value):
     return [day for day in WEEK if day in named]
 
 
-def cook_days(cx):
+def cook_days(cx) -> list[str]:
     """The days the household cooks on, in week order."""
     return days(get(cx, "cook_days"))
 
 
-def shop_days(cx):
+def shop_days(cx) -> list[str]:
     """The days the household shops on, in week order."""
     return days(get(cx, "shop_days"))
 
 
-def dietary_rules(cx, kind=None):
+def dietary_rules(cx, *, kind: str | None = None) -> list[Row]:
     """What will not be eaten, all of it or one kind of it."""
     if kind is None:
         return cx.execute("select * from dietary_rule order by kind, value").fetchall()
-    if kind not in KINDS:
-        raise ValueError("a dietary rule is one of %s, not %r" % (", ".join(KINDS), kind))
+    one_of(kind, KINDS, "dietary rule")
     return cx.execute("select * from dietary_rule where kind = %s order by value",
                       (kind,)).fetchall()
 
 
-def add_dietary_rule(cx, kind, value, note=None):
+def add_dietary_rule(cx, kind: str, value: str, *, note: str | None = None) -> Row:
     """Record something that will not be eaten.
 
     Stating the same rule twice updates its note rather than failing: the
     board re-sending a row is not an error, it is someone pressing save.
     """
-    if kind not in KINDS:
-        raise ValueError("a dietary rule is one of %s, not %r" % (", ".join(KINDS), kind))
+    one_of(kind, KINDS, "dietary rule")
     return cx.execute(
         "insert into dietary_rule (kind, value, note) values (%s, %s, %s)"
         " on conflict (kind, value) do update set note = excluded.note returning *",
         (kind, value.strip().lower(), note)).fetchone()
 
 
-def remove_dietary_rule(cx, kind, value):
+def remove_dietary_rule(cx, kind: str, value: str) -> bool:
     """Lift a rule. True when there was one to lift."""
+    one_of(kind, KINDS, "dietary rule")
     return cx.execute("delete from dietary_rule where kind = %s and lower(value) = lower(%s)",
                       (kind, value.strip())).rowcount > 0
 
 
-def recipe_filters(cx):
+def recipe_filters(cx) -> RecipeFilters:
     """What will not be eaten, shaped for the search the planner already makes.
 
     Spoonacular's complexSearch takes `diet`, `intolerances` and
@@ -209,22 +234,18 @@ def recipe_filters(cx):
     than empty so a caller drops the parameter instead of sending a blank.
     """
     diets, intolerances, disliked = [], [], []
+    buckets = {"diet": diets, "intolerance": intolerances, "dislike": disliked}
     for row in dietary_rules(cx):
-        {"diet": diets, "intolerance": intolerances, "dislike": disliked}[row["kind"]].append(
-            row["value"])
-    return {
-        "diet": ",".join(diets) or None,
-        "intolerances": intolerances,
-        "exclude_ingredients": disliked,
-    }
+        buckets[row["kind"]].append(row["value"])
+    return RecipeFilters(",".join(diets) or None, intolerances, disliked)
 
 
-def equipment(cx):
+def equipment(cx) -> list[Row]:
     """Everything the kitchen has been asked about, present or not."""
     return cx.execute("select * from equipment order by name").fetchall()
 
 
-def add_equipment(cx, name, present=True):
+def add_equipment(cx, name: str, *, present: bool = True) -> Row:
     """Write down a piece of kit, or say it has left the kitchen."""
     return cx.execute(
         "insert into equipment (name, present) values (%s, %s)"
@@ -232,7 +253,7 @@ def add_equipment(cx, name, present=True):
         (name.strip().lower(), present)).fetchone()
 
 
-def remove_equipment(cx, name):
+def remove_equipment(cx, name: str) -> bool:
     """Take a piece of kit off the list entirely. True when it was on it.
 
     Different from setting it absent: a row saying `present = false` is the
@@ -243,7 +264,7 @@ def remove_equipment(cx, name):
                       (name.strip(),)).rowcount > 0
 
 
-def has_equipment(cx, name):
+def has_equipment(cx, name: str) -> bool:
     """Whether a recipe asking for this can be cooked here.
 
     Unknown means available. The table starts empty and fills as recipes ask
@@ -257,7 +278,7 @@ def has_equipment(cx, name):
     return True if row is None else row["present"]
 
 
-def missing_equipment(cx, required):
+def missing_equipment(cx, required: Iterable[str]) -> list[str]:
     """Which of a recipe's equipment this kitchen does not have, in order.
 
     Empty means the recipe is cookable here; anything in it is the reason to

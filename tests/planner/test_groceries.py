@@ -20,8 +20,9 @@ from board import plan_pages
 from kitchen import pantry
 from matching.ingredients import PantryItem, RecipeIngredient
 from planner import groceries, week
-from recipes import client, fixtures
+from recipes import client
 from recipes.hold import HOLD_SECONDS, Hold
+from tests.recipes import fixtures
 
 # A Monday, written down rather than computed, so the suite does not plan a
 # different week depending on the day it is run.
@@ -329,7 +330,7 @@ def a_week(db, meals=None, state=None):
 
 
 def meals_of(db, plan_id):
-    return {(row["meal_on"], row["slot"]): row for row in week.read(db, plan_id)["meals"]}
+    return {(row["meal_on"], row["slot"]): row for row in week.read(db, plan_id).meals}
 
 
 @pytest.mark.database
@@ -669,6 +670,58 @@ def test_the_board_survives_a_database_with_no_schema_yet(db):
 
 
 @pytest.mark.database
+def test_a_plan_asked_for_by_something_that_is_not_a_number_says_so(db):
+    # A truncated link and an unplanned week look identical on a phone, and
+    # only one of them is worth going to look for.
+    page = plan_pages.week_page(db, {"plan": ["soon"]}, today=MONDAY)
+    assert "a plan is asked for by number" in page
+    assert "needs-answer" in page
+    assert "a plan is asked for by number" in plan_pages.groceries_page(
+        db, {"plan": ["soon"]}, today=MONDAY)
+
+
+@pytest.mark.database
+def test_a_period_nobody_planned_is_a_page_and_not_a_failure(db):
+    # A plan id that is a number and names nothing is the same silence as no
+    # week at all, which is the honest answer for it.
+    page = plan_pages.groceries_page(db, {"plan": ["99001"]}, today=MONDAY)
+    assert "nothing to buy" in page
+    assert "needs-answer" not in page
+
+
+@pytest.mark.database
+def test_a_week_the_house_can_already_cook_says_so_rather_than_showing_nothing(db, monkeypatch):
+    pantry.add_perishable(db, "notional chickpeas", 4000, "g", 30, acquired_on=MONDAY)
+    a_week(db, meals=(week.Meal(MONDAY, "dinner", 2, week.COOK, 9006),))
+    monkeypatch.setattr(groceries, "Spoonacular", lambda **kwargs: Dishes(dishes={
+        9006: dish(9006, line("notional chickpeas", 400, "g", "canned and jarred"))}))
+    page = plan_pages.groceries_page(db, {}, today=MONDAY)
+    # An empty list and a list that could not be built look the same and mean
+    # opposite things; only one of them gets to say the house has everything.
+    assert "the week is cooked from what is already in the house" in page
+    assert "what the house already has" in page
+
+
+@pytest.mark.database
+def test_a_wording_nobody_has_answered_is_asked_about_and_not_assumed(db, monkeypatch):
+    # "notional peas" resembles the pantry's "notional chickpeas" without
+    # anybody having said they are the same thing, so it stays a question: a
+    # silent yes leaves a dinner short and a silent no buys a second jar.
+    pantry.add_perishable(db, "notional chickpeas", 400, "g", 30, acquired_on=MONDAY)
+    a_week(db, meals=(week.Meal(MONDAY, "dinner", 2, week.COOK, 9007),))
+    monkeypatch.setattr(groceries, "Spoonacular", lambda **kwargs: Dishes(dishes={
+        9007: dish(9007, line("notional peas", 400, "g", "canned and jarred"))}))
+    page = plan_pages.groceries_page(db, {}, today=MONDAY)
+    assert "what nobody has said" in page
+    # Called what the recipe asked for, not what it was guessed to be: the
+    # answer does not go in the question.
+    assert "notional pea" in page
+    assert "nobody has said so" in page
+    # Answering means naming the thing in the pantry the way the recipe does.
+    assert "href='/pantry'" in page
+
+
+@pytest.mark.database
 def test_the_routes_are_what_the_router_wires(db):
-    assert [route.path for route in plan_pages.ROUTES] == ["/", "/week", "/groceries"]
+    assert [route.path for route in plan_pages.ROUTES] == ["/", "/groceries"]
     assert {route.method for route in plan_pages.ROUTES} == {"GET"}

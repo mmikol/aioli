@@ -10,12 +10,12 @@ from kitchen import moves, pantry
 
 def test_a_reason_is_checked_before_the_connection_is_touched():
     with pytest.raises(ValueError, match="reason"):
-        moves.record(None, "eaten", "rice")
+        moves._record(None, "eaten", "rice")
 
 
 def test_a_cause_may_not_carry_the_separator_that_reads_it_back():
     with pytest.raises(ValueError):
-        moves.record(None, "cooked", "rice", cause="plan_meal - 184")
+        moves._record(None, "cooked", "rice", cause="plan_meal - 184")
 
 
 @pytest.mark.database
@@ -117,13 +117,13 @@ def test_a_cause_keeps_the_note_it_was_given(db):
 def test_a_meal_leaves_the_history_the_cooldown_reads(db):
     pantry.add_perishable(db, "chicken thigh", 2, "lb", 3)
     pantry.add_staple(db, "rice")
-    done = moves.cook(db, [{"ingredient": "chicken thigh", "quantity": 1, "unit": "lb"}, "rice"],
+    done = moves.cook(db, [moves.Used("chicken thigh", 1, "lb"), "rice"],
                       eaten_on=datetime.date(2026, 9, 20), slot="dinner", method="braised")
     assert pantry.find(db, "chicken thigh")["quantity"] == 1
     assert pantry.find(db, "rice")["level"] == "low"
-    assert [(row["ingredient"], row["method"]) for row in done["history"]] == [
+    assert [(row["ingredient"], row["method"]) for row in done.history] == [
         ("chicken thigh", "braised"), ("rice", "braised")]
-    assert [row["reason"] for row in done["moves"]] == ["cooked", "cooked"]
+    assert [row["reason"] for row in done.moves] == ["cooked", "cooked"]
 
 
 @pytest.mark.database

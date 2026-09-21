@@ -6,10 +6,10 @@ Two kinds of test:
     database    marked `database`, handed a migrated schema, rolled back after
 
 The second connects through db.psql, so the suite exercises the same
-connection and the same migrations the container boots with. AIOLI_NO_DATABASE
-runs the suite with no database at all, which is what CI does; so does a
-database that is simply not there, because a developer without the stack up
-should get skips and not a wall of errors.
+connection and the same migrations the container boots with. CI runs both
+halves against a service container. AIOLI_NO_DATABASE runs the suite with no
+database at all, and so does a database that is simply not there, because a
+developer without the stack up should get skips and not a wall of errors.
 """
 import os
 import uuid

@@ -1,0 +1,7 @@
+# What checks the code, and nothing the container needs. Installed by CI and
+# by a developer's venv; the image installs requirements.txt alone. Bumped
+# together with it, and the suite is what says a bump is safe.
+-r requirements.txt
+pytest==9.1.1
+pytest-cov==7.1.0
+ruff==0.16.8

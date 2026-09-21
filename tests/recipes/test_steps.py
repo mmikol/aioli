@@ -14,7 +14,8 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import urlsplit
 
 from matching.ingredients import RecipeIngredient
-from recipes import client, fixtures, hold, steps
+from recipes import client, hold, steps
+from tests.recipes import fixtures
 
 # A key shaped like one and belonging to nobody.
 KEY = "not-a-real-key-0000"
@@ -166,10 +167,10 @@ def test_the_points_spent_at_the_pan_reach_the_ledger(monkeypatch):
                             key=KEY, opener=service, **wired_with))
     kitchen = steps.Stove(clock=Clock())
     spent = []
-    kitchen.method(9001, lambda points, calls: spent.append((points, calls)))
+    kitchen.method(9001, usage=lambda points, calls: spent.append((points, calls)))
     assert spent == [(1.01, 1)]
     # The hold spends nothing, so it records nothing.
-    kitchen.method(9001, lambda points, calls: spent.append((points, calls)))
+    kitchen.method(9001, usage=lambda points, calls: spent.append((points, calls)))
     assert len(spent) == 1
 
 
@@ -182,7 +183,7 @@ def test_a_refusal_at_the_pan_reaches_the_ledger_too(monkeypatch):
                             key=KEY, opener=service, **wired_with))
     kitchen = steps.Stove(clock=Clock())
     spent = []
-    assert kitchen.method(9001, lambda points, calls: spent.append((points, calls))).trouble
+    assert kitchen.method(9001, usage=lambda points, calls: spent.append((points, calls))).trouble
     assert spent == [(0.0, 1)]
 
 

@@ -96,24 +96,23 @@ def test_the_filters_are_shaped_for_the_search(db):
     settings.add_dietary_rule(db, "intolerance", "peanut")
     settings.add_dietary_rule(db, "dislike", "cilantro")
     settings.add_dietary_rule(db, "dislike", "olives")
-    assert settings.recipe_filters(db) == {
-        "diet": "vegetarian",
-        "intolerances": ["peanut"],
-        "exclude_ingredients": ["cilantro", "olives"],
-    }
+    assert settings.recipe_filters(db) == settings.RecipeFilters(
+        diet="vegetarian",
+        intolerances=["peanut"],
+        exclude_ingredients=["cilantro", "olives"])
 
 
 @pytest.mark.database
 def test_a_household_with_nothing_to_avoid_sends_no_diet(db):
-    assert settings.recipe_filters(db) == {
-        "diet": None, "intolerances": [], "exclude_ingredients": []}
+    assert settings.recipe_filters(db) == settings.RecipeFilters(
+        diet=None, intolerances=[], exclude_ingredients=[])
 
 
 @pytest.mark.database
 def test_stating_a_rule_twice_is_someone_pressing_save(db):
     settings.add_dietary_rule(db, "dislike", "olives")
     settings.add_dietary_rule(db, "dislike", "Olives", note="in a tapenade they are fine")
-    rules = settings.dietary_rules(db, "dislike")
+    rules = settings.dietary_rules(db, kind="dislike")
     assert len(rules) == 1
     assert rules[0]["note"] == "in a tapenade they are fine"
     assert settings.remove_dietary_rule(db, "dislike", "olives") is True

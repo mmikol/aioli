@@ -12,12 +12,16 @@ The hour is kept by a clock of the hold's own. Sweeping only when somebody
 asks answers correctly and still leaves the text resident in a quiet process
 for as long as nobody opens another meal, and the terms cap what may sit in
 memory rather than what may be answered from it. So a thread of its own sweeps
-on the minute, and every way of asking sweeps as well.
+on the minute, and every way of asking sweeps as well. The thread starts at
+the first thing held: a hold is built at module scope, and until something is
+in it there is nothing to sweep and no reason for an import to have started a
+thread.
 """
 import threading
 import time
 import weakref
 from collections import OrderedDict
+from collections.abc import Callable
 
 # The terms cap a cache at an hour, so an hour is the ceiling. It is enforced
 # rather than configured: a caller may ask for less and the constructor
@@ -55,17 +59,24 @@ class Hold:
     of its own across the fetch (recipes/steps.py).
     """
 
-    def __init__(self, *, clock=time.monotonic, hold_seconds=HOLD_SECONDS,
-                 hold_at_most=HELD_AT_MOST, sweep_every=SWEEP_SECONDS):
+    def __init__(self, *, clock: Callable[[], float] = time.monotonic,
+                 hold_seconds: float = HOLD_SECONDS,
+                 hold_at_most: int = HELD_AT_MOST, sweep_every: float = SWEEP_SECONDS):
         self._clock = clock
         self._hold_seconds = max(0.0, min(float(hold_seconds), float(HOLD_SECONDS)))
         self._hold_at_most = max(1, int(hold_at_most))
         self._kept: OrderedDict[object, tuple[float, object]] = OrderedDict()
         self._lock = threading.Lock()
         self._stopped = threading.Event()
-        self._sweeper = self._sweeping(max(0.01, float(sweep_every)))
+        self._sweep_every = max(0.01, float(sweep_every))
+        self._sweeper = None
+        # A hold nobody holds any more ends its own thread, rather than
+        # leaving it to wake once more on a clock that may be an hour long.
+        # The finalizer holds the event and not the hold, so it does not keep
+        # what it is watching alive.
+        weakref.finalize(self, self._stopped.set)
 
-    def get(self, key):
+    def get(self, key: object) -> object | None:
         """What is held under a key, or None when it is absent or past the hour."""
         with self._lock:
             self._drop_the_stale()
@@ -77,15 +88,23 @@ class Hold:
             self._kept.move_to_end(key)
             return found[1]
 
-    def put(self, key, value) -> None:
-        """Hold one answer, pushing out the least recently wanted at the bound."""
+    def put(self, key: object, value: object) -> None:
+        """Hold one answer, pushing out the least recently wanted at the bound.
+
+        A stopped hold takes nothing: `stop` is what a process says on its way
+        out, and a hold that went on accepting answers after it would be a
+        cache with no clock behind it and the hour no longer true of it.
+        """
+        if self._stopped.is_set():
+            return
         with self._lock:
+            self._start_sweeping()
             self._kept[key] = (self._clock(), value)
             self._kept.move_to_end(key)
             while len(self._kept) > self._hold_at_most:
                 self._kept.popitem(last=False)
 
-    def forget(self, key=None) -> None:
+    def forget(self, key: object = None) -> None:
         """Drop one entry, or all of them.
 
         The terms say everything obtained goes when the key does, so saying it
@@ -120,18 +139,28 @@ class Hold:
         for key in stale:
             del self._kept[key]
 
-    def _sweeping(self, every):
-        """The thread that makes the hour true of a quiet process.
+    def _start_sweeping(self) -> None:
+        """The thread that makes the hour true of a quiet process, started at
+        the first thing held rather than at construction.
+
+        Under the caller's lock, and once. A hold is built at module scope -
+        the board's stove, the grocery list's lookups - so a thread started in
+        `__init__` is a thread started by importing the module, in every
+        process that imports it and in every test run that never holds
+        anything. Nothing needs sweeping until something is held.
 
         One thread per hold, waiting on an event rather than sleeping, so a
         process that says `stop` does not wait out a minute to exit. The
         reference back is weak: a hold nobody holds any more takes its thread
         with it instead of keeping itself alive to be swept forever.
         """
+        if self._sweeper is not None or self._stopped.is_set():
+            return
         held = weakref.ref(self)
         stopped = self._stopped
+        every = self._sweep_every
 
-        def sweeping():
+        def sweeping() -> None:
             while not stopped.wait(every):
                 hold = held()
                 if hold is None:
@@ -139,6 +168,5 @@ class Hold:
                 hold.sweep()
                 del hold
 
-        thread = threading.Thread(target=sweeping, name="the-hour", daemon=True)
-        thread.start()
-        return thread
+        self._sweeper = threading.Thread(target=sweeping, name="the-hour", daemon=True)
+        self._sweeper.start()

@@ -10,7 +10,8 @@ import os
 
 import pytest
 
-from recipes import client, fixtures
+from recipes import client
+from tests.recipes import fixtures
 
 FIXTURES = (fixtures.COMPLEX_SEARCH, fixtures.COMPLEX_SEARCH_WITH_NUTRITION,
             fixtures.FIND_BY_INGREDIENTS, fixtures.INFORMATION)

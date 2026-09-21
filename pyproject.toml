@@ -1,8 +1,7 @@
-[project]
-name = "aioli"
-version = "0.1.0"
-description = "A personal chef assistant"
-requires-python = ">=3.12"
+# Not a package: nothing builds or installs aioli, the container runs it out
+# of /app and a checkout runs it out of the working directory. So there is no
+# [project] table to keep in step with requirements.txt, which is where the
+# dependencies are and the only place they are.
 
 [tool.ruff]
 line-length = 100
@@ -14,8 +13,21 @@ select = ["E", "F", "W", "I", "UP", "B"]
 # log line, and the codebase next door is written the same way.
 ignore = ["UP031"]
 
+# Annotations are on the boundaries a caller has to get right. Every public
+# function of every package is annotated, because those are the signatures
+# another module reads; a private helper may be, and is where its shape is not
+# obvious beside its caller. `cx` itself stays bare - it is the one argument
+# nearly all of them take, and naming its type says nothing - and what comes
+# back from a reader is `db.psql.Row`, a psycopg dict row keyed by column
+# name. Nothing here runs a type checker; the annotations are for the person
+# reading the signature.
+
 [tool.coverage.run]
 omit = ["tests/*", ".venv/*"]
 
 [tool.coverage.report]
-fail_under = 0
+# The floor CI holds the suite to, set under where it actually sits rather
+# than at it: a floor that tracks the number to the point is a floor that
+# fails on a refactor which deleted covered code. It is not zero because CI
+# runs against a real database now, so the figure means something.
+fail_under = 90

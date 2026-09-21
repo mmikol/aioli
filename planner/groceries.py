@@ -35,13 +35,30 @@ times over. Two dinners each wanting the 400 g in the fridge is one dinner
 cooked and one shopped for, and a list that said otherwise would send the
 household home short of exactly one dinner.
 """
+import threading
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, field, replace
 
 from kitchen import pantry
-from matching.ingredients import PantryItem, RecipeIngredient, cover, normalise_name
-from matching.units import convert, normalise_unit
+from matching.ingredients import (
+    Alias,
+    PantryItem,
+    RecipeIngredient,
+    cover,
+    normalise_name,
+)
+from matching.units import Conversion, convert, normalise_unit
 from planner import week
-from recipes.client import MissingKey, QuotaExhausted, Spoonacular, SpoonacularError, usage_into
+from recipes import steps
+from recipes.client import (
+    NO_KEY,
+    QUOTA,
+    REFUSED,
+    Spoonacular,
+    SpoonacularError,
+    trouble_of,
+    usage_into,
+)
 from recipes.hold import Hold
 
 # Where a line goes when nothing says which part of a shop it belongs in.
@@ -79,6 +96,13 @@ CRUMB = 1e-9
 # written nowhere (docs/db.md).
 HELD = Hold()
 
+# Taken around the whole of one list's lookups, the way recipes/steps.py takes
+# one around a single fetch and for the same reason: the board is threaded, so
+# two tabs opening the list would otherwise both miss the hold and spend a
+# point per dish twice over. A household of one can wait behind the first of
+# them, and the second finds everything already held.
+_LOOKING = threading.Lock()
+
 
 @dataclass(frozen=True)
 class Amount:
@@ -93,7 +117,7 @@ class Amount:
     unit: str | None = None
 
     @property
-    def said(self):
+    def said(self) -> str:
         """The amount as a person would write it on a list."""
         if self.quantity is None:
             return ""
@@ -124,12 +148,12 @@ class Line:
     candidates: tuple[tuple[str, float], ...] = ()
 
     @property
-    def shared(self):
+    def shared(self) -> bool:
         """True when more than one meal wants it."""
         return len(self.meals) > 1
 
     @property
-    def said(self):
+    def said(self) -> str:
         """Every amount on the line, in words. Empty when the recipes gave none."""
         return " and ".join(amount.said for amount in self.amounts if amount.said)
 
@@ -164,17 +188,17 @@ class Groceries:
     dishes: int = 0
 
     @property
-    def shared(self):
+    def shared(self) -> tuple[Line, ...]:
         """What is bought for more than one meal."""
         return tuple(line for line in self.buy if line.shared)
 
     @property
-    def alone(self):
+    def alone(self) -> tuple[Line, ...]:
         """What is bought for a single meal, which is where waste starts."""
         return tuple(line for line in self.buy if not line.shared)
 
     @property
-    def overlap(self):
+    def overlap(self) -> float:
         """The share of the list more than one meal wants, from 0 to 1.
 
         Read over what is bought and not over what the house already holds:
@@ -184,7 +208,7 @@ class Groceries:
         return len(self.shared) / len(self.buy) if self.buy else 0.0
 
     @property
-    def empty(self):
+    def empty(self) -> bool:
         """True when there is nothing to carry and nothing to answer."""
         return not self.buy and not self.ask
 
@@ -199,15 +223,42 @@ class Wanted:
 
     `aisles` maps a normalised wording to the part of a shop the service files
     it under. An aisle is a supermarket's vocabulary rather than a recipe's
-    words - recipes/fixtures.py settles that in TAXONOMY_KEYS - and it is used
-    to order a list on a screen and written down nowhere.
+    words - tests/recipes/fixtures.py settles that in TAXONOMY_KEYS - and it is
+    used to order a list on a screen and written down nowhere.
     """
     meal: int
     lines: tuple[RecipeIngredient, ...] = ()
-    aisles: dict = field(default_factory=dict)
+    aisles: dict[str, str] = field(default_factory=dict)
 
 
-def for_plan(cx, plan_id, client=None):
+@dataclass
+class _Tally:
+    """One running amount on a line, added to as the week is walked.
+
+    Mutable where `Amount` is frozen, and the only reason it exists: `Amount`
+    is what a finished list is read from, and this is what the adding is done
+    in.
+    """
+    quantity: float
+    unit: str | None = None
+
+
+@dataclass
+class _Folding:
+    """A line part way through being built, before `_lines` freezes it.
+
+    The same fields `Line` carries, in the shapes the fold wants them: the
+    meals and the amounts are appended to as each meal is read, and the aisle
+    is settled by the first meal that files the wording under one.
+    """
+    reason: str = ""
+    candidates: tuple[tuple[str, float], ...] = ()
+    aisle: str = ELSEWHERE
+    meals: list[int] = field(default_factory=list)
+    amounts: list[_Tally] = field(default_factory=list)
+
+
+def for_plan(cx, plan_id: int, client: Spoonacular | None = None) -> "Groceries | None":
     """The shopping for a saved plan, or None when there is no such plan.
 
     One lookup per distinct dish still to be cooked, and the answers are read
@@ -220,23 +271,25 @@ def for_plan(cx, plan_id, client=None):
     plan = week.read(cx, plan_id)
     if plan is None:
         return None
-    row = plan["plan"]
+    row = plan.row
     bare = Groceries(plan_id=row["id"], period=row["period"])
-    cooks = [meal for meal in plan["meals"] if still_to_cook(meal)]
+    cooks = [meal for meal in plan.meals if week.still_to_cook(meal)]
     if not cooks:
-        return replace(bare, note=_nothing_pointed_at(row, plan["meals"]))
+        return replace(bare, note=_nothing_pointed_at(row, plan.meals))
 
     wanted, unknown, refusal = _look_up(cx, client, cooks)
     if not wanted:
         return replace(bare, unknown=unknown,
                        note=refusal or "no dish on this week could be looked up")
-    items, aliases, conversions = _kitchen(cx)
+    items, aliases, conversions = week.for_matcher(cx)
     found = gather(wanted, items, aliases=aliases, conversions=conversions)
     return replace(found, plan_id=row["id"], period=row["period"], unknown=unknown,
                    note=_summary(len(wanted), unknown, refusal))
 
 
-def gather(wanted, held, *, aliases=None, conversions=()):
+def gather(wanted: Iterable["Wanted"], held: Iterable[PantryItem], *,
+           aliases: dict[str, Alias] | None = None,
+           conversions: Sequence[Conversion] = ()) -> "Groceries":
     """The meals' lines against the pantry, folded into one list.
 
     `wanted` is the meals in the order the week happens in, and the order is
@@ -249,16 +302,13 @@ def gather(wanted, held, *, aliases=None, conversions=()):
     arguments, so the whole of it can be tested without either.
     """
     wanted = list(wanted)
-    remaining = [dict(ingredient=item.ingredient, quantity=item.quantity, unit=item.unit,
-                      grade=item.grade, level=item.level) for item in held]
+    remaining = list(held)
     buy, ask, kept = {}, {}, {}
     for meal in wanted:
-        items = [PantryItem(row["ingredient"], row["quantity"], row["unit"],
-                            row["grade"], row["level"]) for row in remaining]
-        coverage = cover(meal.lines, items, aliases=aliases, conversions=conversions)
+        coverage = cover(meal.lines, remaining, aliases=aliases, conversions=conversions)
         for need in coverage.covered:
             _fold(kept, _name(need), need, meal, need.quantity, conversions)
-            _spend(remaining, need, conversions)
+            remaining = _spend(remaining, need, conversions)
         for need in coverage.missing:
             # What is short where the pantry holds some of it, and the whole
             # amount where it holds none. A staple that is out has no number
@@ -270,7 +320,7 @@ def gather(wanted, held, *, aliases=None, conversions=()):
     return Groceries(_lines(buy), _lines(ask), _lines(kept), dishes=len(wanted))
 
 
-def by_aisle(lines):
+def by_aisle(lines: Iterable["Line"]) -> tuple[tuple[str, tuple["Line", ...]], ...]:
     """The list grouped into the parts of a shop, in the order it is already in.
 
     `_lines` has already put the aisles in order and `the rest` last, so this
@@ -284,46 +334,25 @@ def by_aisle(lines):
     return tuple((aisle, tuple(found)) for aisle, found in groups)
 
 
-def ingredients_of(result):
+def ingredients_of(payload: object) -> tuple[tuple[RecipeIngredient, ...], dict[str, str]]:
     """A dish's lines, and the parts of a shop they are filed under.
 
-    `extendedIngredients` is what /information answers with and used plus
-    missed is what a search answers with, so either payload can be handed in
-    and neither is treated as the authority on what the house holds - that is
-    this kitchen's arithmetic to do (matching/ingredients.py).
+    The lines are recipes/steps.py's to read, whichever call answered with
+    the payload. What is read here is the one field only a shopping list
+    wants: the aisle, which is a supermarket's vocabulary rather than a
+    recipe's, is used to order a screen and is written down nowhere.
 
     Cut to PER_RECIPE on the way in: `number` is a request and the ceiling
     above is a promise.
     """
-    found = result.get("extendedIngredients")
-    if not isinstance(found, list) or not found:
-        found = (list(result.get("usedIngredients") or [])
-                 + list(result.get("missedIngredients") or []))
-    lines, aisles = [], {}
-    for line in list(found)[:PER_RECIPE]:
-        if not isinstance(line, dict):
-            continue
-        wording = str(line.get("original") or line.get("name") or "").strip()
-        if not wording:
-            continue
-        lines.append(RecipeIngredient(wording, line.get("amount"), line.get("unit")))
-        aisle = str(line.get("aisle") or "").strip().lower()
-        if aisle:
+    aisles = {}
+    for row in steps.ingredient_rows(payload)[:PER_RECIPE]:
+        wording = steps.wording_of(row)
+        aisle = str(row.get("aisle") or "").strip().lower()
+        if wording and aisle:
             aisles.setdefault(normalise_name(wording), aisle)
-    return tuple(lines), aisles
+    return steps.lines_of(payload, most=PER_RECIPE), aisles
 
-
-def still_to_cook(meal):
-    """Whether a meal is still something to shop for.
-
-    A portion of an earlier cook buys nothing: its ingredients went into the
-    pan the day before. A skipped meal buys nothing either, and neither does
-    one already cooked - the stock for it has moved. Replanning a week that
-    went wrong is its own item; leaving a cooked dinner off the shopping is
-    not replanning, it is not buying dinner twice.
-    """
-    return (meal["kind"] == week.COOK and meal["recipe_id"] is not None
-            and not meal["skipped"] and meal["cooked_at"] is None)
 
 
 def _nothing_pointed_at(row, meals):
@@ -359,6 +388,12 @@ def _look_up(cx, client, cooks):
     The client is built at the first call out and not before, so a list every
     dish of which is held still renders on a board with no key set.
     """
+    with _LOOKING:
+        return _looked_up(cx, client, cooks)
+
+
+def _looked_up(cx, client, cooks):
+    """One list's lookups, under the lock `_look_up` takes."""
     dishes, wanted, unknown, refusal, spent = {}, [], [], None, 0
     for meal in cooks:
         recipe_id = meal["recipe_id"]
@@ -384,12 +419,22 @@ def _look_up(cx, client, cooks):
 
 
 def _why(refusal):
-    """Why the list is short, in words a person can act on."""
-    if isinstance(refusal, MissingKey):
+    """Why the list is short, in words a person can act on.
+
+    Which failure it was is recipes/client.py's to say; what to say about it
+    is this module's, because a list read in an aisle wants different words
+    from a note on a week nobody is standing over.
+    """
+    trouble = trouble_of(refusal)
+    if trouble == NO_KEY:
         return "there is no Spoonacular key, so the week's dishes could not be looked up"
-    if isinstance(refusal, QuotaExhausted):
+    if trouble == QUOTA:
         return "the day's Spoonacular points are spent, so this is as far as the list got"
-    return "the recipe service could not be reached: %s" % refusal
+    if trouble == REFUSED:
+        return "the recipe service answered %s, so this is as far as the list got" % refusal.status
+    # Without the exception's own text, for the reason planner/week.py's own
+    # `_why` gives.
+    return "the recipe service could not be reached"
 
 
 def _summary(dishes, unknown, refusal):
@@ -400,18 +445,6 @@ def _summary(dishes, unknown, refusal):
         if refusal:
             note += " - %s" % refusal
     return note
-
-
-def _kitchen(cx):
-    """The pantry, the answered wordings and the factors, as the matcher wants them.
-
-    Read through planner/week.py's own readers instead of a second set of
-    queries. The plan and the list have to be looking at the same pantry: two
-    spellings of one question is how the week that was planned and the week
-    that is shopped for start disagreeing, and nothing would say which of them
-    was wrong.
-    """
-    return week._pantry_items(cx), week._aliases(cx), week._conversions(cx)
 
 
 def _name(need, *, as_asked=False):
@@ -434,16 +467,15 @@ def _name(need, *, as_asked=False):
 
 def _fold(bucket, name, need, meal, quantity, conversions):
     """One line into the list, added to whatever is already under its name."""
-    line = bucket.setdefault(name, {"meals": [], "amounts": [], "aisle": ELSEWHERE,
-                                    "reason": need.reason, "candidates": need.match.candidates})
-    if meal.meal not in line["meals"]:
-        line["meals"].append(meal.meal)
-    if line["aisle"] == ELSEWHERE:
-        line["aisle"] = meal.aisles.get(normalise_name(need.wording), ELSEWHERE)
-    _into(line["amounts"], quantity, need.unit, name, conversions)
+    line = bucket.setdefault(name, _Folding(need.reason, need.match.candidates))
+    if meal.meal not in line.meals:
+        line.meals.append(meal.meal)
+    if line.aisle == ELSEWHERE:
+        line.aisle = meal.aisles.get(normalise_name(need.wording), ELSEWHERE)
+    _add_amount(line.amounts, quantity, need.unit, name, conversions)
 
 
-def _into(amounts, quantity, unit, name, conversions):
+def _add_amount(amounts, quantity, unit, name, conversions):
     """Add an amount to a line, in a unit already on it where one converts.
 
     A line with no number stays a line: a recipe that says "a handful of
@@ -453,43 +485,56 @@ def _into(amounts, quantity, unit, name, conversions):
     if quantity is None:
         return
     unit = normalise_unit(unit) if unit is not None else None
-    for held in amounts:
-        if held[1] == unit:
-            held[0] += quantity
+    for already in amounts:
+        if already.unit == unit:
+            already.quantity += quantity
             return
-        moved = convert(quantity, unit, held[1], ingredient=name, conversions=conversions)
+        moved = convert(quantity, unit, already.unit, ingredient=name, conversions=conversions)
         if moved:
-            held[0] += moved.quantity
+            already.quantity += moved.quantity
             return
-    amounts.append([quantity, unit])
+    amounts.append(_Tally(quantity, unit))
 
 
 def _spend(remaining, need, conversions):
-    """Take what a meal covered out of the pantry the rest of the week reads.
+    """The pantry the rest of the week reads, less what this meal covered.
 
     Only a measured line moves anything. A staple is in stock or it is not and
     has no quantity to spend (kitchen/pantry.py), and a line the recipe gave
     no amount for is presence rather than arithmetic, so neither is deducted.
+
+    The lots come back as new rows instead of being edited where they lie. A
+    PantryItem is frozen because the matcher is handed the same rows, and a
+    lot that gave something up is a lot with less in it.
     """
     if need.quantity is None or need.unit is None or need.ingredient is None:
-        return
-    left = need.quantity
+        return remaining
+    left, spent = need.quantity, []
     for row in remaining:
-        if row["ingredient"] != need.ingredient or row["grade"] != pantry.PERISHABLE:
+        if (left <= CRUMB or row.ingredient != need.ingredient
+                or row.grade != pantry.PERISHABLE or not row.quantity):
+            spent.append(row)
             continue
-        if not row["quantity"]:
-            continue
-        moved = convert(row["quantity"], row["unit"], need.unit,
+        moved = convert(row.quantity, row.unit, need.unit,
                         ingredient=need.ingredient, conversions=conversions)
         if not moved:
+            spent.append(row)
             continue
         taken = min(moved.quantity, left)
-        back = convert(taken, need.unit, row["unit"],
+        back = convert(taken, need.unit, row.unit,
                        ingredient=need.ingredient, conversions=conversions)
-        row["quantity"] = max(row["quantity"] - (back.quantity if back else row["quantity"]), 0.0)
+        if not back:
+            # Unreachable as the arithmetic stands: the conversion above went
+            # the other way between the same two units, and matching/units.py
+            # answers both directions or neither. Written as a lot that cannot
+            # be spent rather than as a fallback, because the fallback it
+            # replaces emptied the lot - the one answer that is certainly
+            # wrong - and left `left` saying the meal had been covered.
+            spent.append(row)
+            continue
+        spent.append(replace(row, quantity=max(row.quantity - back.quantity, 0.0)))
         left -= taken
-        if left <= CRUMB:
-            return
+    return spent
 
 
 def _lines(bucket):
@@ -499,9 +544,9 @@ def _lines(bucket):
     line nothing could place should not interrupt the produce.
     """
     built = [Line(name=name,
-                  amounts=tuple(Amount(quantity, unit) for quantity, unit in line["amounts"]),
-                  aisle=line["aisle"], meals=tuple(line["meals"]),
-                  reason=line["reason"], candidates=tuple(line["candidates"]))
+                  amounts=tuple(Amount(each.quantity, each.unit) for each in line.amounts),
+                  aisle=line.aisle, meals=tuple(line.meals),
+                  reason=line.reason, candidates=tuple(line.candidates))
              for name, line in bucket.items()]
     return tuple(sorted(built, key=lambda line: (line.aisle == ELSEWHERE,
                                                  line.aisle.lower(), line.name.lower())))

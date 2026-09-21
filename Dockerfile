@@ -6,6 +6,8 @@ RUN useradd --create-home --uid 1000 app
 WORKDIR /app
 
 ENV PYTHONDONTWRITEBYTECODE=1
+# The runtime manifest only: ruff and pytest check this code and have no
+# business in the image that runs it (requirements-dev.txt).
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 

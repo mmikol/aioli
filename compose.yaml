@@ -3,8 +3,11 @@
 #   db      PostgreSQL: the household's own record
 #   board   the page, http://localhost:8018, and the migrations on boot
 #
-# The board binds to 127.0.0.1 and nothing is published; `tailscale serve`
-# on the host is what carries a phone to it (docs/fleet.md).
+# The board is published on the host's loopback and nowhere else, which is
+# what `127.0.0.1:8018:8018` below says; inside the container it binds
+# 0.0.0.0, because a bind to the container's own loopback is a published port
+# nothing can reach. `tailscale serve` on the host is what carries a phone to
+# it (docs/fleet.md).
 
 name: aioli
 

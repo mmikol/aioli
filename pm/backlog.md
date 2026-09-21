@@ -71,12 +71,13 @@ The decisions the items below assume, so no item has to restate them.
   rule - a local model beside this stack is an 8B on 16 GB and can be a
   32B on 64 GB, and on Apple Silicon getting that wrong does not fail, it
   goes quietly slow.
-- **The board stays on 127.0.0.1; the tailnet does the reaching.** Nothing
-  is published and no port is opened. `tailscale serve` on the host
-  proxies the board onto the tailnet, so a phone can answer a
-  confirmation from anywhere and the container's binding never changes.
-  This keeps the deployment story the same as next door: there is no
-  deployment.
+- **The board stays on the host's loopback; the tailnet does the reaching.**
+  Nothing is published to the network: the port is published on
+  `127.0.0.1` and the container binds `0.0.0.0` only because a published
+  port has to reach something. `tailscale serve` on the host proxies the
+  board onto the tailnet, so a phone can answer a confirmation from
+  anywhere and the container's binding never changes. This keeps the
+  deployment story the same as next door: there is no deployment.
 - **Store prices come from a price book the user keeps.** Whole Foods and
   Costco publish no API. See the closing section.
 - **AIoli never buys anything.** It may fill a cart and it may say what a

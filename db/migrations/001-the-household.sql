@@ -104,6 +104,11 @@ create table run (
 
 -- Points spent per day, so a run can know before it starts whether it can
 -- finish rather than half-planning a week.
+--
+-- The one table in this file the kitchen does not own. It is written by the
+-- thing that spends the points and read by the thing that decides whether to
+-- start, both of which are recipes/client.py; a ledger of what we spent at
+-- somebody else's service is not the household's record of what it has.
 create table api_usage (
     day     date primary key,
     points  integer not null default 0,

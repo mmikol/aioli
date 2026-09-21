@@ -131,6 +131,11 @@ class Converted:
 
     It is one type rather than a value-or-exception because a refusal is an
     ordinary outcome here: it becomes a question on the board.
+
+    `quantity` is set whenever `ok`, and is None only on a refusal. That is
+    the whole of the invariant, and it is what lets a reader that has checked
+    `ok` - or the truthiness `__bool__` gives it - go straight to the number
+    without a second guard.
     """
     ok: bool
     quantity: float | None

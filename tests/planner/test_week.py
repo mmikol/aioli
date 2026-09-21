@@ -11,8 +11,10 @@ import psycopg
 import pytest
 
 from kitchen import moves, pantry, settings
+from matching.ingredients import RecipeIngredient
 from planner import week
-from recipes import client, fixtures
+from recipes import client
+from tests.recipes import fixtures
 
 # A Monday, so a week runs from it to the Sunday after. Written down rather
 # than computed from today, because a suite whose plan shifts with the day it
@@ -80,7 +82,7 @@ def by_slot(plan):
 
 def rows_by_slot(held):
     """The saved meals, reachable the same way."""
-    return {(row["meal_on"], row["slot"]): row for row in held["meals"]}
+    return {(row["meal_on"], row["slot"]): row for row in held.meals}
 
 
 def empty_plan(db, period="2026-W39", state="draft"):
@@ -96,9 +98,9 @@ def test_a_period_is_the_iso_week_the_plan_starts_in():
 
 
 def test_a_plan_starts_on_the_monday_ahead_unless_today_is_monday():
-    assert week.next_monday(MONDAY) == MONDAY
-    assert week.next_monday(DAYS[1]) == MONDAY + datetime.timedelta(days=7)
-    assert week.next_monday(DAYS[6]) == MONDAY + datetime.timedelta(days=7)
+    assert week.next_monday(today=MONDAY) == MONDAY
+    assert week.next_monday(today=DAYS[1]) == MONDAY + datetime.timedelta(days=7)
+    assert week.next_monday(today=DAYS[6]) == MONDAY + datetime.timedelta(days=7)
 
 
 def test_a_dinner_is_cooked_and_the_next_day_eats_it_for_lunch():
@@ -153,7 +155,7 @@ def test_what_the_week_already_buys_costs_the_next_dish_nothing():
     urgency = {"rice": 1.0}
     candidate = week.Candidate(1, ("rice",), ("invented lemon", "fictional saffron"))
     assert week.terms(candidate, urgency)["buying"] == -2.0
-    assert week.terms(candidate, urgency, {"invented lemon"})["buying"] == -1.0
+    assert week.terms(candidate, urgency, basket={"invented lemon"})["buying"] == -1.0
     shares = week.Candidate(2, ("rice",), ("invented lemon",))
     alone = week.Candidate(3, ("rice",), ("fictional saffron",))
     basket = {"invented lemon"}
@@ -166,7 +168,7 @@ def test_the_objective_has_two_terms_and_a_third_would_be_an_addition():
     assert set(week.terms(candidate, urgency)) == {"pantry", "buying"}
     # A weight for a term that does not exist yet is simply not applied, which
     # is what lets cost arrive as one more entry in each and nothing else.
-    with_cost = week.score(candidate, urgency, dict(week.WEIGHTS, cost=2.0))
+    with_cost = week.score(candidate, urgency, weights=dict(week.WEIGHTS, cost=2.0))
     assert with_cost == week.score(candidate, urgency)
 
 
@@ -442,9 +444,9 @@ def test_a_week_saved_is_a_week_read_back(db):
     assert row["state"] == "draft"
     assert (row["starts_on"], row["ends_on"]) == (MONDAY, DAYS[-1])
     held = week.read(db, row["id"])
-    assert len(held["meals"]) == 14
-    saved = {meal["id"]: meal for meal in held["meals"]}
-    for meal in held["meals"]:
+    assert len(held.meals) == 14
+    saved = {meal["id"]: meal for meal in held.meals}
+    for meal in held.meals:
         if meal["kind"] == "leftovers":
             assert saved[meal["pairs_with"]]["kind"] == "cook"
             assert meal["recipe_id"] is None
@@ -459,7 +461,47 @@ def test_a_week_nothing_could_be_found_for_is_saved_as_unfilled(db, monkeypatch)
     row = week.save(db, week.plan(db, start=MONDAY, today=MONDAY))
     assert row["state"] == "unfilled"
     assert "no Spoonacular key" in row["note"]
-    assert len(week.read(db, row["id"])["meals"]) == 14
+    assert len(week.read(db, row["id"]).meals) == 14
+
+
+def written(db, tables):
+    """Every value in every one of these tables, lowercased, as one haystack."""
+    found = []
+    for table in tables:
+        for row in db.execute("select * from " + table).fetchall():
+            found.extend(str(value).lower() for value in row.values() if value is not None)
+    return " ".join(found)
+
+
+def every_table(db):
+    """The tables the schema holds, asked for rather than listed.
+
+    Asked, so a table a later migration adds is inside the sweep below the day
+    it lands. A hard rule guarded by a hand-written list is a rule that holds
+    until somebody writes a migration and forgets (docs/db.md).
+    """
+    return [row["table_name"] for row in db.execute(
+        "select table_name from information_schema.tables"
+        " where table_schema = current_schema() and table_name <> 'schema_migrations'"
+    ).fetchall()]
+
+
+def service_prose():
+    """What the invented service authored: the titles, and the method's steps.
+
+    A household types an ingredient into its pantry and never types a recipe's
+    name or a line of its method anywhere, so one of these found in any table
+    is the line in docs/db.md being crossed. The ingredient wordings are not
+    here for the opposite reason: this suite's own pantry is spelled out of
+    the same invented vocabulary, and a name the household wrote down is the
+    household's whatever it resembles.
+    """
+    dishes = (list(fixtures.COMPLEX_SEARCH["results"]) + list(fixtures.FIND_BY_INGREDIENTS)
+              + [fixtures.INFORMATION])
+    found = {str(dish["title"]).lower() for dish in dishes if dish.get("title")}
+    for block in fixtures.INFORMATION.get("analyzedInstructions") or ():
+        found.update(str(step["step"]).lower() for step in block.get("steps") or ())
+    return found
 
 
 @pytest.mark.database
@@ -467,15 +509,28 @@ def test_nothing_the_service_wrote_reaches_a_table(db):
     stock(db)
     plan = planned(db)
     row = week.save(db, plan)
-    written = []
-    for table in ("plan", "plan_meal"):
-        for stored in db.execute("select * from " + table).fetchall():
-            written.extend(str(value).lower() for value in stored.values() if value is not None)
-    haystack = " ".join(written)
+    tables = every_table(db)
+    assert "plan_meal" in tables
+
+    # The service's own prose - a dish's name, a step of its method - is a
+    # thing no household types anywhere, so it is looked for in every table
+    # the schema holds rather than in the two the planner writes.
+    everywhere = written(db, tables)
+    authored = service_prose()
+    assert authored
+    for phrase in authored:
+        assert phrase not in everywhere, "%r reached a table" % phrase
+
+    # The invented words on their own are swept over the two tables the
+    # planner writes rather than over all of them: this test typed some of
+    # them into the pantry itself, and a name the household wrote down is the
+    # household's whatever it resembles.
+    planned_rows = written(db, ("plan", "plan_meal"))
     for marker in fixtures.SYNTHETIC_MARKERS:
-        assert marker not in haystack, "%s reached a table" % marker
+        assert marker not in planned_rows, "%s reached a table" % marker
+
     # The single permitted pointer, and it is an integer and nothing else.
-    pointers = {meal["recipe_id"] for meal in week.read(db, row["id"])["meals"]} - {None}
+    pointers = {meal["recipe_id"] for meal in week.read(db, row["id"]).meals} - {None}
     assert pointers <= {9001, 9002, 9003}
     assert all(isinstance(pointer, int) for pointer in pointers)
 
@@ -487,9 +542,9 @@ def test_closing_a_period_purges_the_pointers(db):
     row = week.save(db, plan)
     assert week.close(db, row["id"]) == len(plan.cooks)
     held = week.read(db, row["id"])
-    assert held["plan"]["state"] == "closed"
-    assert held["plan"]["closed_at"] is not None
-    assert all(meal["recipe_id"] is None for meal in held["meals"])
+    assert held.row["state"] == "closed"
+    assert held.row["closed_at"] is not None
+    assert all(meal["recipe_id"] is None for meal in held.meals)
     # A second close has nothing left to purge, which is the point.
     assert week.close(db, row["id"]) == 0
 
@@ -504,9 +559,9 @@ def test_planning_a_week_closes_the_weeks_whose_period_has_passed(db):
     week.save(db, week.plan(db, Stub(), start=DAYS[-1] + datetime.timedelta(days=1),
                             today=DAYS[-1] + datetime.timedelta(days=1)))
     held = week.read(db, over["id"])
-    assert held["plan"]["state"] == "closed"
-    assert held["plan"]["closed_at"] is not None
-    assert all(meal["recipe_id"] is None for meal in held["meals"])
+    assert held.row["state"] == "closed"
+    assert held.row["closed_at"] is not None
+    assert all(meal["recipe_id"] is None for meal in held.meals)
 
 
 @pytest.mark.database
@@ -514,11 +569,11 @@ def test_the_week_being_eaten_is_left_alone_by_the_purge(db):
     stock(db)
     row = week.save(db, planned(db))
     assert week.close_passed(db, today=MONDAY) == 0
-    assert week.read(db, row["id"])["plan"]["state"] == "draft"
+    assert week.read(db, row["id"]).row["state"] == "draft"
 
     after_it_ended = DAYS[-1] + datetime.timedelta(days=1)
     assert week.close_passed(db, today=after_it_ended) == 8
-    assert week.read(db, row["id"])["plan"]["state"] == "closed"
+    assert week.read(db, row["id"]).row["state"] == "closed"
     # A second run has nothing left to purge, which is the point.
     assert week.close_passed(db, today=after_it_ended) == 0
 
@@ -533,7 +588,7 @@ def test_skipping_a_cook_empties_it_and_whatever_would_have_eaten_it(db):
     assert portion["pairs_with"] == cook["id"]
 
     week.skip(db, cook["id"])
-    after = {meal["id"]: meal for meal in week.read(db, row["id"])["meals"]}
+    after = {meal["id"]: meal for meal in week.read(db, row["id"]).meals}
     assert after[cook["id"]]["skipped"]
     assert after[cook["id"]]["recipe_id"] is None
     assert after[cook["id"]]["servings"] == 0
@@ -547,15 +602,17 @@ def test_confirming_a_cook_moves_the_stock_once(db):
     stock(db)
     row = week.save(db, planned(db))
     cook = rows_by_slot(week.read(db, row["id"]))[(DAYS[0], "dinner")]
-    used = [{"ingredient": "notional chickpeas", "quantity": 1, "unit": "can"}]
+    # The recipe's own wording, as the stove hands it over: the matching
+    # against the household's name is the planner's to do.
+    lines = [RecipeIngredient("1 can notional chickpeas", 1, "can")]
 
-    week.confirm_cooked(db, cook["id"], used)
+    week.confirm_cooked(db, cook["id"], lines=lines)
     # The same tap arriving twice from a phone on a bad connection.
-    week.confirm_cooked(db, cook["id"], used)
+    week.confirm_cooked(db, cook["id"], lines=lines)
 
     assert pantry.find(db, "notional chickpeas")["quantity"] == 1
     assert len(moves.caused_by(db, "plan_meal:%d" % cook["id"])) == 1
-    after = {meal["id"]: meal for meal in week.read(db, row["id"])["meals"]}
+    after = {meal["id"]: meal for meal in week.read(db, row["id"]).meals}
     assert after[cook["id"]]["cooked_at"] is not None
 
 
@@ -571,7 +628,7 @@ def test_confirming_a_portion_of_an_earlier_cook_moves_nothing(db):
     # The stock went when the dish was cooked; eating the second portion is
     # not a second subtraction.
     assert moves.recent(db) == []
-    after = {meal["id"]: meal for meal in week.read(db, row["id"])["meals"]}
+    after = {meal["id"]: meal for meal in week.read(db, row["id"]).meals}
     assert after[portion["id"]]["cooked_at"] is not None
 
 

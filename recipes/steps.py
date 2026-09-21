@@ -30,15 +30,27 @@ import html
 import re
 import threading
 import time
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass, replace
 
 from matching.ingredients import RecipeIngredient
-from recipes.client import MissingKey, QuotaExhausted, Spoonacular, SpoonacularError
+from recipes.client import (
+    NO_KEY,
+    QUOTA,
+    REFUSED,
+    Spoonacular,
+    SpoonacularError,
+    trouble_of,
+)
 from recipes.hold import HELD_AT_MOST, HOLD_SECONDS, SWEEP_SECONDS, Hold
 
 # The hour, the count and the sweep are recipes/hold.py's, named here as well
 # because they are what a caller of this module asks about. The ceiling is the
 # terms' rule and a hold refuses more than an hour whatever it is handed.
+
+# The fifth word a caller may find on a Method, and the one that comes with
+# `ok` true: the other four are recipes/client.py's, imported above.
+NO_STEPS = "no steps"
 
 _TAG = re.compile(r"<[^>]+>")
 _BREAK = re.compile(r"</li\s*>|</p\s*>|<br\s*/?>|\n", re.IGNORECASE)
@@ -71,6 +83,12 @@ class Method:
     on - quota, unreachable, refused, no key, no steps - and `sentence` is
     the plain words a person reads in place of the card.
 
+    One case sets both `ok` and `trouble`: a fetch that landed with nothing
+    to cook from, 'no steps'. The ingredients are there and a caller
+    subtracting stock wants them, so it is not a failure; a caller about to
+    show a method reads `trouble` and prints the sentence in place of an
+    empty card. Every other trouble comes with `ok` false.
+
     `lines` are `matching.ingredients.RecipeIngredient`, the type `cover`
     takes, so a board that wants to say what the cupboard is short of passes
     them straight on without reshaping anything.
@@ -101,25 +119,26 @@ class Stove:
     The board keeps one for the life of the process, because a hold is only
     worth having if the next request finds it.
 
-    `chef` is a `recipes.client.Spoonacular`. Left out, one is built from the
-    environment at the first fetch rather than at construction, so a board
-    with no key still starts and still shows the week - only the steps are
-    missing.
+    `client` is a `recipes.client.Spoonacular`, the name every other module
+    here calls it by. Left out, one is built from the environment at the first
+    fetch rather than at construction, so a board with no key still starts and
+    still shows the week - only the steps are missing.
 
     `clock` returns seconds and has to be monotonic; it is the hold's, and
     tests hand in their own so the hour is tested by moving it rather than by
     waiting one out.
     """
 
-    def __init__(self, chef=None, *, clock=time.monotonic, hold_seconds=HOLD_SECONDS,
-                 hold_at_most=HELD_AT_MOST, sweep_every=SWEEP_SECONDS):
-        self._chef = chef
+    def __init__(self, client: Spoonacular | None = None, *,
+                 clock: Callable[[], float] = time.monotonic, hold_seconds: float = HOLD_SECONDS,
+                 hold_at_most: int = HELD_AT_MOST, sweep_every: float = SWEEP_SECONDS):
+        self._client = client
         self._kept = Hold(clock=clock, hold_seconds=hold_seconds,
                           hold_at_most=hold_at_most, sweep_every=sweep_every)
         self._lock = threading.Lock()
         self._spending = None
 
-    def method(self, recipe_id, usage=None) -> Method:
+    def method(self, recipe_id: int, *, usage: Callable | None = None) -> Method:
         """What is at the stove for this recipe: the hold if it is fresh, the service if not.
 
         `usage` is the ledger's recorder for this request, as
@@ -154,19 +173,16 @@ class Stove:
         """How many methods are being held, once what has expired is gone."""
         return len(self._kept)
 
-    def forget(self, recipe_id=None) -> None:
-        """Drop one held method, or all of them.
-
-        The terms say everything obtained goes when the key does, so saying
-        it has to be one call and not a walk over a dict nobody else can see.
-        """
+    def forget(self, recipe_id: int | None = None) -> None:
+        """Drop one held method, or all of them. The rule is recipes/hold.py
+        `Hold.forget`'s."""
         self._kept.forget(None if recipe_id is None else int(recipe_id))
 
     def stop(self) -> None:
         """Let the hour go and drop what is held. What a process says on its way out."""
         self._kept.stop()
 
-    def _record(self, points, calls) -> None:
+    def _record(self, points: float, calls: int) -> None:
         """Hand a fetch's cost to the recorder bound for it, if there is one.
 
         The client is built once and the ledger is written per request, so
@@ -175,65 +191,72 @@ class Stove:
         if self._spending is not None:
             self._spending(points, calls)
 
-    def _fetch(self, recipe_id) -> Method:
-        """One call out, with every way it can fail turned into a sentence."""
+    def _fetch(self, recipe_id: int) -> Method:
+        """One call out, with every way it can fail turned into a sentence.
+
+        The client is built at the first fetch and not before, and wired to
+        `_record` so every point this stove spends reaches whichever ledger
+        the request that asked for it is writing to. One handed in by a caller
+        keeps the recorder that caller gave it.
+        """
         try:
-            chef = self._client()
-        except MissingKey:
-            return _trouble(recipe_id, "no key",
-                            "There is no recipe service key set, so the steps cannot be"
-                            " fetched. The plan and the pantry are unaffected.")
-        try:
-            payload = chef.information(recipe_id)
-        except QuotaExhausted:
-            return _trouble(recipe_id, "quota",
-                            "The day's recipe quota is spent, so the steps cannot be fetched"
-                            " until tomorrow.")
+            if self._client is None:
+                self._client = Spoonacular(usage=self._record)
+            payload = self._client.information(recipe_id)
         except SpoonacularError as refused:
-            if refused.status is None:
-                return _trouble(recipe_id, "unreachable",
-                                "The recipe service cannot be reached, so the steps are not"
-                                " here. It is worth trying again in a minute.")
-            return _trouble(recipe_id, "refused",
-                            "The recipe service answered %s, so the steps are not here."
-                            " It is worth trying again in a minute." % refused.status)
+            return _refused(recipe_id, refused)
         return _read(recipe_id, payload)
 
-    def _client(self):
-        """The client, built at the first fetch and not before.
 
-        Wired to `_record`, so every point this stove spends reaches whichever
-        ledger the request that asked for it is writing to. A client handed in
-        by a caller keeps the recorder that caller gave it.
-        """
-        if self._chef is None:
-            self._chef = Spoonacular(usage=self._record)
-        return self._chef
+def _refused(recipe_id: int, refusal: SpoonacularError) -> Method:
+    """A call out that did not land, as the word and the sentence at the pan.
+
+    The word is recipes/client.py's, so the stove, the planner and the list
+    all agree about which failure this was. The sentence is this module's,
+    because it is read by somebody standing over a hot pan and wants to say
+    what that person can do next.
+    """
+    trouble = trouble_of(refusal)
+    if trouble == NO_KEY:
+        return _trouble(recipe_id, trouble,
+                        "There is no recipe service key set, so the steps cannot be"
+                        " fetched. The plan and the pantry are unaffected.")
+    if trouble == QUOTA:
+        return _trouble(recipe_id, trouble,
+                        "The day's recipe quota is spent, so the steps cannot be fetched"
+                        " until tomorrow.")
+    if trouble == REFUSED:
+        return _trouble(recipe_id, trouble,
+                        "The recipe service answered %s, so the steps are not here."
+                        " It is worth trying again in a minute." % refusal.status)
+    return _trouble(recipe_id, trouble,
+                    "The recipe service cannot be reached, so the steps are not here."
+                    " It is worth trying again in a minute.")
 
 
-def _read(recipe_id, payload) -> Method:
+def _read(recipe_id: int, payload: object) -> Method:
     """The payload reduced to what the stove needs, and nothing kept of the rest."""
     if not isinstance(payload, dict):
-        return _trouble(recipe_id, "refused",
+        return _trouble(recipe_id, REFUSED,
                         "The recipe service answered with something that is not a recipe.")
     steps = _steps(payload)
     method = Method(recipe_id=recipe_id, ok=True,
                     title=_text(payload.get("title")),
-                    ready_minutes=_whole(payload.get("readyInMinutes")),
-                    servings=_whole(payload.get("servings")),
+                    ready_minutes=whole_number(payload.get("readyInMinutes")),
+                    servings=whole_number(payload.get("servings")),
                     steps=steps,
-                    lines=_lines(payload),
+                    lines=lines_of(payload),
                     equipment=_gathered(step.equipment for step in steps))
     if not steps:
         # A recipe the service holds no method for is not a failure of the
         # service, and it is still a blank card unless somebody says so.
-        return replace(method, trouble="no steps",
+        return replace(method, trouble=NO_STEPS,
                        sentence="The service publishes no method for this recipe, only its"
                                 " ingredients.")
     return method
 
 
-def _steps(payload) -> tuple[Step, ...]:
+def _steps(payload: dict) -> tuple[Step, ...]:
     """The instructions, from the analysed list or from the prose behind it.
 
     `analyzedInstructions` is the good case and is empty often enough that a
@@ -259,7 +282,7 @@ def _steps(payload) -> tuple[Step, ...]:
                  for number, text in enumerate(_prose(payload.get("instructions")), 1))
 
 
-def _prose(raw) -> tuple[str, ...]:
+def _prose(raw: object) -> tuple[str, ...]:
     """A method sent as one lump of markup, split into things to read.
 
     The service sends `instructions` as HTML about as often as plain text, so
@@ -272,32 +295,74 @@ def _prose(raw) -> tuple[str, ...]:
     return tuple(piece for piece in pieces if piece)
 
 
-def _lines(payload) -> tuple[RecipeIngredient, ...]:
-    """The ingredient list, in the shape `matching.ingredients.cover` takes.
+def ingredient_rows(payload: object) -> tuple[dict, ...]:
+    """A payload's raw ingredient rows, whichever call answered with it.
 
-    `original` is the line as the recipe writes it: what a person reads off a
-    card, and what `normalise_name` strips the amount off anyway. One wording
-    serves the stove and the cupboard alike.
+    /information answers `extendedIngredients`; a search answers
+    `usedIngredients` plus `missedIngredients`, and which of those the pantry
+    actually answers is this kitchen's arithmetic to do rather than the
+    service's to be believed about. Which key holds them is known here and
+    nowhere else, so a key the service renames is changed once.
+
+    Raw, because one caller wants a field this house does not model: the part
+    of a shop a supermarket files a thing under (planner/groceries.py). A
+    caller that wants only the wordings takes `lines_of`.
     """
+    if not isinstance(payload, dict):
+        return ()
+    found = payload.get("extendedIngredients")
+    if not isinstance(found, list) or not found:
+        found = (list(payload.get("usedIngredients") or [])
+                 + list(payload.get("missedIngredients") or []))
+    return tuple(row for row in found or () if isinstance(row, dict))
+
+
+def wording_of(row: dict) -> str:
+    """One ingredient row's words, as the recipe writes them.
+
+    `original` is the line a person reads off a card, and what
+    `normalise_name` strips the amount off anyway. One wording serves the
+    stove and the cupboard alike.
+    """
+    return (_text(row.get("original")) or _text(row.get("originalName"))
+            or _text(row.get("name")))
+
+
+def lines_of(payload: object, *, most: int | None = None) -> tuple[RecipeIngredient, ...]:
+    """A payload's ingredient list, in the shape `matching.ingredients.cover` takes.
+
+    `most` is a ceiling for a caller that has one: `number` is a request to
+    the service and a ceiling is a promise the caller made (planner/).
+    """
+    rows = ingredient_rows(payload)
+    if most is not None:
+        rows = rows[:most]
     found = []
-    for item in payload.get("extendedIngredients") or ():
-        if not isinstance(item, dict):
-            continue
-        wording = (_text(item.get("original")) or _text(item.get("originalName"))
-                   or _text(item.get("name")))
+    for row in rows:
+        wording = wording_of(row)
         if wording:
-            found.append(RecipeIngredient(wording, item.get("amount"),
-                                          _text(item.get("unit")) or None))
+            found.append(RecipeIngredient(wording, row.get("amount"),
+                                          _text(row.get("unit")) or None))
     return tuple(found)
 
 
-def _names(items) -> tuple[str, ...]:
-    """The equipment one step calls for, in order and without repeats.
+def equipment_of(payload: object) -> tuple[str, ...]:
+    """What a payload says the cook needs from the kitchen, first wanted first.
 
-    An equipment name is the kitchen's vocabulary rather than the recipe's -
-    a skillet is the word for a skillet - so it may be read out here, and it
-    feeds `kitchen.settings.missing_equipment` unchanged.
+    A search result names no equipment, so this is usually empty and nothing
+    is dropped; the fuller payload the board already holds when it is showing
+    a method is where it comes from. An equipment name is the kitchen's
+    vocabulary rather than the recipe's - a skillet is the word for a skillet
+    - so it feeds `kitchen.settings.missing_equipment` unchanged.
     """
+    if not isinstance(payload, dict):
+        return ()
+    return _gathered(step.equipment for step in _steps(payload))
+
+
+def _names(items: object) -> tuple[str, ...]:
+    """The equipment one step calls for, in order and without repeats. Why it
+    passes through unchanged is `equipment_of`'s."""
     found = []
     for item in items or ():
         name = _text(item.get("name")) if isinstance(item, dict) else _text(item)
@@ -306,7 +371,7 @@ def _names(items) -> tuple[str, ...]:
     return tuple(found)
 
 
-def _gathered(groups) -> tuple[str, ...]:
+def _gathered(groups: Iterable[Iterable[str]]) -> tuple[str, ...]:
     """Every step's equipment as one list, in the order it is first wanted."""
     found = []
     for group in groups:
@@ -316,20 +381,25 @@ def _gathered(groups) -> tuple[str, ...]:
     return tuple(found)
 
 
-def _trouble(recipe_id, trouble, sentence) -> Method:
+def _trouble(recipe_id: int, trouble: str, sentence: str) -> Method:
     """A method that did not land, carrying what to show in its place."""
     return Method(recipe_id=recipe_id, ok=False, trouble=trouble, sentence=sentence)
 
 
-def _text(value) -> str:
+def _text(value: object) -> str:
     """A string off the payload, its whitespace collapsed, or nothing."""
     if not isinstance(value, str):
         return ""
     return _SPACES.sub(" ", value).strip()
 
 
-def _whole(value) -> int | None:
-    """A count the service sends as an int, as a float, or not at all."""
+def whole_number(value: object) -> int | None:
+    """A count the service sends as an int, as a float, or not at all.
+
+    Public because the planner reads the same `servings` field off the same
+    payloads, and a second copy of four lines is a second place to be wrong
+    about what the service sends.
+    """
     if isinstance(value, bool) or not isinstance(value, int | float):
         return None
     return int(round(value))

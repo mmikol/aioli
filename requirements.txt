@@ -1,4 +1,5 @@
-psycopg[binary]==3.2.3
-pytest==8.3.4
-pytest-cov==6.0.0
-ruff==0.8.4
+# What the container runs. Pinned exactly, because the image and a
+# developer's checkout should be the same checkout, and with the binary extra
+# so no build toolchain is needed in a slim image. The tools that check this
+# code are in requirements-dev.txt beside it and are not in the image.
+psycopg[binary]==3.3.6
