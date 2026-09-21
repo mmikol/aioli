@@ -1,0 +1,103 @@
+/* The board reads on a phone first: the confirmations are answered standing
+   in a kitchen, not sitting at a desk. Everything below is one column that
+   widens rather than a layout that reflows. */
+
+:root {
+    --ink: #1c1a17;
+    --quiet: #6b6560;
+    --line: #e2ddd6;
+    --paper: #fbf9f6;
+    --warm: #b4532a;        /* the one accent: a thing that needs answering */
+    --soon: #8a6d1f;        /* something about to turn */
+}
+
+@media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+        --ink: #ece7e0;
+        --quiet: #9b948c;
+        --line: #332f2b;
+        --paper: #171513;
+        --warm: #e08155;
+        --soon: #d4ae4e;
+    }
+}
+
+* { box-sizing: border-box; }
+
+body {
+    margin: 0;
+    background: var(--paper);
+    color: var(--ink);
+    font: 16px/1.55 ui-serif, Georgia, "Times New Roman", serif;
+    -webkit-text-size-adjust: 100%;
+}
+
+main {
+    max-width: 44rem;
+    margin: 0 auto;
+    padding: 2rem 16px 4rem;
+}
+
+h1 {
+    font-size: 1.6rem;
+    font-weight: 600;
+    letter-spacing: -0.01em;
+    margin: 0 0 1.5rem;
+}
+
+h2 {
+    font-size: 1.1rem;
+    font-weight: 600;
+    margin: 2rem 0 0.75rem;
+    padding-bottom: 0.35rem;
+    border-bottom: 1px solid var(--line);
+}
+
+.quiet { color: var(--quiet); }
+.soon { color: var(--soon); }
+.needs-answer { color: var(--warm); }
+
+/* A meal, a pantry line, a grocery line: all the same row, because they are
+   all a thing with a name and a state. */
+.row {
+    display: flex;
+    gap: 0.75rem;
+    align-items: baseline;
+    padding: 0.55rem 0;
+    border-bottom: 1px solid var(--line);
+}
+
+.row .name { flex: 1; }
+.row .state { color: var(--quiet); font-size: 0.875rem; white-space: nowrap; }
+
+/* The confirm buttons are the thing most often pressed, and pressed with one
+   thumb, so they are large before they are pretty. */
+button, .button {
+    font: inherit;
+    font-size: 0.9375rem;
+    color: var(--ink);
+    background: transparent;
+    border: 1px solid var(--line);
+    border-radius: 0.375rem;
+    padding: 0.45rem 0.8rem;
+    min-height: 2.75rem;
+    cursor: pointer;
+}
+
+button:hover { border-color: var(--quiet); }
+button.primary { border-color: var(--warm); color: var(--warm); }
+
+table { width: 100%; border-collapse: collapse; font-size: 0.9375rem; }
+th {
+    text-align: left;
+    font-weight: 600;
+    color: var(--quiet);
+    border-bottom: 1px solid var(--line);
+    padding: 0.4rem 0.5rem 0.4rem 0;
+}
+td { padding: 0.45rem 0.5rem 0.45rem 0; border-bottom: 1px solid var(--line); }
+
+code {
+    font: 0.875em ui-monospace, SFMono-Regular, Menlo, monospace;
+    color: var(--quiet);
+}
