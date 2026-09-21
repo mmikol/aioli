@@ -55,6 +55,16 @@ The decisions the items below assume, so no item has to restate them.
   nothing hard-codes a serving count.
 - **The board is a web page in the container.** Marking a meal skipped and
   editing the pantry are both editing, and editing wants a page.
+- **It runs on a 16 to 32 GB machine, not the one it is written on.** The
+  whole stack - PostgreSQL, the board, the clock - has to leave room for
+  the rest of that machine's life, so every service carries a memory limit
+  and the limits assume the small end. Two consequences worth stating
+  once. The planner's search is bounded work over a week of meals rather
+  than a solver turned loose, so its ceiling is known before it runs. And
+  a local model, if one is ever used here, is an 8B at that size and not a
+  34B: on 16 GB a larger one either will not load beside PostgreSQL or
+  will page, and paging on Apple Silicon does not fail, it just goes
+  quietly slow.
 - **The board stays on 127.0.0.1; the tailnet does the reaching.** Nothing
   is published and no port is opened. `tailscale serve` on the host
   proxies the board onto the tailnet, so a phone can answer a

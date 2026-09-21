@@ -19,6 +19,14 @@ x-app: &app
     - no-new-privileges:true
   cap_drop:
     - ALL
+  # The host is a 16 GB machine at the small end, and this stack is not the
+  # only thing on it. The limits are what that machine can spare, not what
+  # the development machine could give.
+  deploy:
+    resources:
+      limits:
+        memory: 512m
+        pids: 256
   networks: [stack]
   environment: &env
     AIOLI_DATABASE_URL: postgresql://aioli:${POSTGRES_PASSWORD:-aioli}@db/aioli
@@ -38,6 +46,19 @@ services:
       POSTGRES_DB: aioli
     security_opt:
       - no-new-privileges:true
+    # One household's data and one reader: the defaults are sized for a
+    # server, and this is not one.
+    command:
+      - postgres
+      - -c
+      - shared_buffers=128MB
+      - -c
+      - max_connections=20
+    deploy:
+      resources:
+        limits:
+          memory: 768m
+          pids: 128
     networks: [stack]
     ports:
       - "127.0.0.1:5434:5432"
