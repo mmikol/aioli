@@ -14,9 +14,18 @@ import pathlib
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
+from board import pages, plan_pages
 from db import psql
 
 STATIC = pathlib.Path(__file__).parent / "static"
+
+# The pages, from the modules that render them. The week comes first so that
+# "/" is the week rather than the shell.
+ROUTES = plan_pages.ROUTES + pages.ROUTES
+
+# A form from this board is a few hundred bytes. Anything larger is not one,
+# and reading it would be reading whatever was sent.
+MOST_FORM_BYTES = 64 * 1024
 
 # Served as-is, and nothing else is: a path that is not on this map does not
 # reach the filesystem.
@@ -85,10 +94,39 @@ class Handler(BaseHTTPRequestHandler):
         except Exception as bad:           # a stack trace is not a page
             return self._send(500, "the board failed: %s" % bad, "text/plain")
 
-    def _route(self, path, query):
-        """The pages. Filled as the modules beneath them land."""
-        if path == "/":
-            return self._send(200, page())
+    def do_POST(self):
+        """A form on the board: an edit to the pantry, the settings or a meal.
+
+        Every write is a POST that renders the page it wrote to, so a phone
+        that answered a confirmation sees the answer land rather than a blank
+        response it has to navigate away from.
+        """
+        path = urlparse(self.path).path
+        try:
+            length = int(self.headers.get("Content-Length") or 0)
+        except ValueError:
+            return self._send(400, "a form wants a length", "text/plain")
+        if length > MOST_FORM_BYTES:
+            return self._send(413, "that is more than a form should be", "text/plain")
+        body = self.rfile.read(length).decode("utf-8", "replace") if length else ""
+        try:
+            return self._route(path, parse_qs(body), method="POST")
+        except Exception as bad:
+            return self._send(500, "the board failed: %s" % bad, "text/plain")
+
+    def _route(self, path, query, method="GET"):
+        """The pages, from the route tables the modules beneath publish.
+
+        A connection per request, and the render owns the transaction: it
+        commits what it wrote or the connection closing rolls it back. One
+        household with one reader, so nothing here pools.
+        """
+        for route in ROUTES:
+            if route.path == path and route.method == method:
+                with psql.connect() as cx:
+                    return self._send(200, route.render(cx, query))
+        if any(route.path == path for route in ROUTES):
+            return self._send(405, "that page does not take a %s" % method, "text/plain")
         return self._send(404, "no such page", "text/plain")
 
 
