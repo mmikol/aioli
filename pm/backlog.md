@@ -79,6 +79,13 @@ The decisions the items below assume, so no item has to restate them.
   the plan it shapes, and retrofitting a filter under a working planner is
   how a week of suggestions gets thrown away. Cost: half a day.
 
+- **A recipe can want a pan you do not own.** A ready time assumes an
+  equipped kitchen, so a recipe calling for a food processor, a stand
+  mixer or a Dutch oven is fiction in a kitchen without one, and it is
+  fiction that reads as a perfectly good suggestion. A short list of what
+  is actually in the kitchen, and a filter that drops what it cannot make.
+  Small, and it rides along with the diet settings. Cost: two hours.
+
 - **Nothing pulls a recipe.** A Spoonacular client, its key read from
   `.env` and never committed, over `complexSearch` for suggestions and
   `priceBreakdownWidget` for cost. Two constraints shape it: the terms cap
@@ -89,6 +96,15 @@ The decisions the items below assume, so no item has to restate them.
   is what the user owns - the plan that was chosen, the pantry, the price
   book. Cost: a day; risk: a design that treats the API as a database and
   has to be unwound later.
+
+- **The tests cannot keep the data they would test against.** The usual
+  move is to record a real response and replay it, and the terms forbid
+  exactly that: recipe data may not be kept past an hour. So the fixtures
+  are written by hand to the shape of the API and are nobody's recipes,
+  and a small contract test run on demand - not in CI, which has no key -
+  checks that the shape still matches what the service returns. Settle it
+  before there is a suite, because a suite built on recorded responses is
+  a suite that has to be thrown away. Cost: half a day.
 
 - **The pantry is not written down.** A table of what is in the fridge and
   the cupboard, with quantity, unit, the date it came in and a rough shelf
@@ -125,6 +141,18 @@ The decisions the items below assume, so no item has to restate them.
   sale price and the date it runs until, so a thing on offer is a thing
   the planner can reach for while the offer lasts and not after. Cost: a
   day.
+
+- **On the first day it knows nothing.** The pantry is empty, the price
+  book is empty, and until both hold something the planner has nothing to
+  plan from - which puts hours of typing between installing this and
+  getting one useful suggestion, and that is how a personal tool dies
+  before it is adopted. So: a starter price book of the twenty or so
+  things actually bought most weeks, a pantry that fills as shopping is
+  confirmed rather than in one sitting, and a planner that degrades
+  honestly when it knows almost nothing - fewer claims, not worse
+  suggestions dressed up. Cost: a day, most of it deciding what the
+  smallest useful seed is. Risk: a seed shipped as data rather than as the
+  user's own, which puts made-up prices into a budget.
 
 - **An ingredient is not a product.** "2 cups diced tomatoes" has to
   become "Kirkland diced tomatoes, 28 oz" before it can be priced,
@@ -170,6 +198,28 @@ The decisions the items below assume, so no item has to restate them.
   and the two-day pairing pull against each other, and the first version
   will want a constraint solver before it wants more heuristics.
 
+- **A recipe serves four and the household is one.** Eating each recipe
+  twice means two servings are wanted, and most recipes yield four to six.
+  Scaling down leaves a third of an onion and half a tin of coconut milk,
+  which is the waste the whole system exists to prevent arriving through
+  the front door. Two halves to it: scale the recipe and book the
+  remainder into the pantry as a real item with a real shelf life, so
+  something later has a chance to use it; and prefer, where the score is
+  close, a recipe whose natural yield divides cleanly into what is wanted.
+  Cost: a day.
+
+- **Nothing survives a week going wrong.** Every item above assumes a
+  plan made on Sunday and a week that obeys it. The week that happens has
+  a meal cooked, a Tuesday eaten out, and a chicken that turned on
+  Wednesday, and by Thursday the plan depends on stock that is gone and
+  budget that is spent. Replanning from a partial week is a different
+  problem from planning a fresh one: what is cooked stays cooked, what is
+  bought stays bought, and only the remainder is solved again. Without it
+  the plan is a document that stops being believed on day three, which is
+  the difference between a tool and a demonstration. Cost: a day and a
+  half; risk: it is tempting to re-run the planner over the whole week,
+  which silently rewrites history.
+
 - **Not everything reheats.** Cooking once and eating twice is right for a
   chili and wrong for a fish, a salad or anything fried, and no source
   publishes a keeps-well flag to sort them. Without one the planner will
@@ -200,15 +250,28 @@ The decisions the items below assume, so no item has to restate them.
   way into at most two shopping trips, split by store, since Whole Foods
   and Costco are not the same errand. Both come out as `.ics`, and nothing
   consumes them yet - that is a later tool - so they are written to disk
-  and served, not sent anywhere. Cost: a day; risk: two trips and two cook
-  sessions constrain each other through shelf life, because a Thursday
-  shop cannot feed a Monday cook.
+  and served, not sent anywhere. A session has a length cap as well as a
+  count: capping the count alone optimises straight towards one four-hour
+  Sunday, which is the outcome nobody wants and the arithmetic prefers.
+  Cost: a day; risk: two trips and two cook sessions constrain each other
+  through shelf life, because a Thursday shop cannot feed a Monday cook.
 
 - **There is nothing to look at.** The board: the week's plan, which meals
   are skipped, the grocery list by store, the pantry, and the price book.
   Read-only would be half of it, since marking a skip and correcting the
   pantry are both writes. Calories and macros ride along on each meal,
   shown and never scored. Cost: two days.
+
+- **At the stove you need the steps, and they may not be kept.** The
+  board shows a plan; cooking needs the method, and the terms forbid
+  storing it, so the steps are fetched at the moment of cooking. That
+  spends quota on a Tuesday evening and fails outright if the service is
+  down while someone is standing in the kitchen. The honest handling is to
+  fetch on opening a meal, hold it for the hour the terms allow so a
+  reload is free, and say plainly when it cannot be had rather than
+  showing a blank card. Cost: half a day; risk: it is the one moment the
+  whole system is being used in earnest, so failing there costs more trust
+  than failing anywhere else.
 
 - **Nothing runs unattended.** The container keeps its own clock: one
   planning run a week, the mails on their two days, and every run
@@ -246,6 +309,15 @@ The decisions the items below assume, so no item has to restate them.
   Worth doing once the planner and the list are real, and not before,
   since a tool over a function that does not work yet is a lie with a
   schema. Cost: half a day.
+
+- **The container holds three secrets and no policy.** A Spoonacular key,
+  SMTP credentials that can send mail as the household, and eventually a
+  signed-in Amazon session that can reach a cart. The fleet's rule says no
+  agent holds a credential capable of finishing an irreversible act, and
+  the Amazon session is the one that tests it: it is allowed to fill a
+  cart and must not be able to place the order. A `SECURITY.md` saying
+  what is held, what each one can do, what it cannot, and what an attacker
+  who reached the container would get. Cost: half a day.
 
 - **The hand-entered data has no copy.** The price book and the pantry are
   hours of a person's typing and exist nowhere else; a dropped volume
