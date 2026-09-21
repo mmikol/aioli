@@ -30,3 +30,6 @@ build/
 
 # desloppify: local scan state, never committed
 .desloppify/
+
+# desloppify writes a scorecard image on every scan
+scorecard.png

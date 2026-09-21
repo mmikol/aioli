@@ -234,7 +234,7 @@ def daily_allowance(tier=None):
 
 
 def remaining_points(cx, tier=None, day=None):
-    """What is left today, which is what a run asks itself before it begins.
+    """What is left today. A run asks this before it begins.
 
     Never negative: a run that has overspent has nothing to plan with, and
     a negative number only invites arithmetic that reads as if it did.

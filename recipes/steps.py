@@ -76,9 +76,9 @@ class Method:
     on - quota, unreachable, refused, no key, no steps - and `sentence` is
     the plain words a person reads in place of the card.
 
-    `lines` are `matching.ingredients.RecipeIngredient`, which is what
-    `cover` takes, so a board that wants to say what the cupboard is short of
-    passes them straight on without reshaping anything.
+    `lines` are `matching.ingredients.RecipeIngredient`, the type `cover`
+    takes, so a board that wants to say what the cupboard is short of passes
+    them straight on without reshaping anything.
 
     Frozen, and made of tuples, so a caller handed a held method cannot edit
     what the next reload will see. Nothing in it is written down: it is the
