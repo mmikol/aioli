@@ -30,7 +30,9 @@ planner/week.py keys a meal on itself and a meal is cooked once.
 Nothing Spoonacular authored is rendered here, and on these three pages that
 is easy: the pantry, the settings and the household's own answers are all the
 household's (docs/db.md). The confirmation view reads a plan row's date and
-slot and never its recipe pointer.
+slot and never its recipe pointer - it follows the pointer to the stove to
+find out what a cook took out of the cupboard, and what comes back is matched
+against the household's own names, subtracted and dropped.
 """
 import collections
 import datetime
@@ -39,7 +41,11 @@ import html
 import secrets
 
 from kitchen import moves, pantry, settings
-from planner import week
+from matching.ingredients import cover
+from matching.units import convert, normalise_unit
+from planner import groceries, week
+from recipes import steps
+from recipes.client import usage_into
 
 # How near turning counts as soon. Three days is the horizon the board
 # colours, and it is the same question the midweek mail asks.
@@ -81,6 +87,13 @@ ORIGINS = {"user": "typed", "default": "the default", "agent": "from another age
 
 MONTHS = ("january", "february", "march", "april", "may", "june",
           "july", "august", "september", "october", "november", "december")
+
+# One stove for the life of the process, because the hour it holds is only
+# worth having if the next request finds it (recipes/steps.py). A
+# confirmation arriving from a phone is one more request, and the meal being
+# confirmed is usually the one whose method was opened at the pan an hour
+# ago, so the answer is already in hand and costs nothing.
+STOVE = steps.Stove()
 
 
 # --- the things every view needs -----------------------------------------
@@ -663,6 +676,18 @@ def _save(cx, query):
 # to ask.
 NOT_BEING_EATEN = ("closed", "unfilled")
 
+# One plan to a period, the way the week view already reads it: the live one,
+# and the newest draft where no plan is live yet. 003-the-week.sql permits a
+# superseded draft beside the live one and `week.save` writes a fresh draft on
+# every run, so a second planning run for one week would otherwise ask about
+# every dinner twice, with nothing on the two rows to tell them apart. Once
+# ingredients reach `confirm_cooked`, answering both moves the stock twice:
+# the cause is 'plan_meal:<id>' and the two rows have different ids, so the
+# ledger's idempotency cannot catch it.
+ONE_PLAN_A_PERIOD = (
+    "select distinct on (period) id, period from plan where state <> all (%s)"
+    " order by period, (state = 'live') desc, created_at desc, id desc")
+
 Meal = collections.namedtuple("Meal", "id on slot servings kind")
 
 
@@ -696,12 +721,12 @@ def awaiting(cx, today=None):
         return []
     rows = cx.execute(
         "select meal.id, meal.meal_on, meal.slot, meal.servings, meal.kind"
-        " from plan_meal meal join plan on plan.id = meal.plan_id"
+        " from plan_meal meal join (" + ONE_PLAN_A_PERIOD + ") plan on plan.id = meal.plan_id"
         " where meal.meal_on between %s and %s and meal.kind is not null"
-        " and not meal.skipped and meal.cooked_at is null and plan.state <> all (%s)"
+        " and not meal.skipped and meal.cooked_at is null"
         " order by meal.meal_on, case meal.slot when 'lunch' then 0 else 1 end, meal.id"
         " limit %s",
-        (today - datetime.timedelta(days=BEHIND_DAYS), today, list(NOT_BEING_EATEN),
+        (list(NOT_BEING_EATEN), today - datetime.timedelta(days=BEHIND_DAYS), today,
          AWAITING)).fetchall()
     return [Meal(row["id"], row["meal_on"], row["slot"], row["servings"], row["kind"])
             for row in rows]
@@ -766,11 +791,6 @@ def confirm_answer(cx, query):
     'plan_meal:<id>' and knows a portion of an earlier cook moves none. A
     board that wrote those rules a second time would be a board that drifts
     from them.
-
-    No ingredients go with the confirmation: a meal's ingredients are the
-    recipe's words, which are not ours to keep (docs/db.md), so the board has
-    no list of its own to subtract. They are passed by whoever is holding the
-    method it fetched at the stove - the backlog item after this one.
     """
     try:
         said = _one(query, "answer")
@@ -778,12 +798,85 @@ def confirm_answer(cx, query):
             raise ValueError("an answer is cooked or skipped, not %r" % said)
         meal = _whole(_one(query, "meal"), "the meal")
         if said == "cooked":
-            week.confirm_cooked(cx, meal)
-        else:
-            week.skip(cx, meal)
+            return _cooked(cx, query, meal)
+        week.skip(cx, meal)
     except ValueError as bad:
         return confirm_page(cx, query, problem=str(bad))
     return confirm_page(cx, query)
+
+
+def _cooked(cx, query, meal_id):
+    """Say a meal happened, and take what it used out of the pantry.
+
+    The ingredients come from the stove. The plan holds a pointer and the
+    recipe's lines are not ours to keep (docs/db.md), so they are fetched at
+    the moment the answer is given, matched against the household's own names
+    and dropped. Without that the button wrote `cooked_at` and moved nothing:
+    the meal left both lists, nobody was ever asked again, and the pantry went
+    on describing a kitchen with a kilo of chicken that had been eaten - the
+    exact fiction the confirm loop exists to prevent (pm/backlog.md).
+
+    A cook whose method could not be had is left unanswered and says so. A
+    meal silently marked done is worse than one still being asked about, and
+    the question is still a good one tomorrow.
+    """
+    row = cx.execute("select * from plan_meal where id = %s", (meal_id,)).fetchone()
+    if row is not None and row["kind"] == week.COOK and row["recipe_id"] is not None:
+        method = STOVE.method(row["recipe_id"], usage_into(cx))
+        if not method.ok:
+            return confirm_page(cx, query, problem="%s the meal is still waiting on an"
+                                                   " answer." % method.sentence)
+        week.confirm_cooked(cx, meal_id, _used(cx, method))
+        return confirm_page(cx, query)
+    # A portion of an earlier cook moves no stock of its own, and a cook with
+    # no pointer left has nothing to fetch - a closed week, or a slot planned
+    # when there was no key. Both are answered and neither is a subtraction.
+    week.confirm_cooked(cx, meal_id)
+    return confirm_page(cx, query)
+
+
+def _used(cx, method):
+    """What a cook took out of the cupboard, in the household's own names.
+
+    Only what `cover` settled is handed over. A line nobody has confirmed the
+    meaning of is a question the pantry page answers, and subtracting it
+    quietly is how the pantry starts describing a kitchen nobody has
+    (matching/ingredients.py). What is left unsubtracted stays on the shelf,
+    which is the direction a person notices and corrects.
+
+    No method goes with it. `eating_history.method` is how a dish was cooked -
+    braised, fried - for the keeps-well rules to read, and nothing here
+    classifies one yet; the recipe's own title is the service's words and is
+    not the answer (docs/db.md, pm/backlog.md).
+    """
+    held, aliases, conversions = groceries._kitchen(cx)
+    coverage = cover(method.lines, held, aliases=aliases, conversions=conversions)
+    shelved = {item.ingredient: item.unit for item in held}
+    return [_taken(need, shelved.get(need.ingredient), conversions)
+            for need in coverage.covered if need.ingredient]
+
+
+def _taken(need, shelf_unit, conversions):
+    """One line as the ledger takes it, in the unit the shelf is measured in.
+
+    `cover` answers in the recipe's unit because the recipe is what has to be
+    satisfied, and `kitchen.pantry.subtract` refuses a unit that is not the
+    shelf's rather than assuming a factor. So the amount comes back into the
+    shelf's unit here, where the household's own conversions are already in
+    hand. A line that will not convert goes over without an amount: the move
+    is still recorded and the drift shows in the ledger, which is better than
+    a confident wrong number in the pantry (kitchen/pantry.py).
+    """
+    line = {"ingredient": need.ingredient, "quantity": need.quantity, "unit": need.unit}
+    if need.quantity is None or shelf_unit is None or need.unit is None:
+        return line
+    if normalise_unit(shelf_unit) == normalise_unit(need.unit):
+        return dict(line, unit=shelf_unit)
+    moved = convert(need.quantity, need.unit, shelf_unit,
+                    ingredient=need.ingredient, conversions=conversions)
+    if not moved:
+        return dict(line, quantity=None, unit=None)
+    return dict(line, quantity=moved.quantity, unit=shelf_unit)
 
 
 # --- what board/serve.py wires -------------------------------------------

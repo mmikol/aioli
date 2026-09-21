@@ -9,11 +9,12 @@ fixtures next door.
 import inspect
 import json
 import threading
+import time
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlsplit
 
 from matching.ingredients import RecipeIngredient
-from recipes import client, fixtures, steps
+from recipes import client, fixtures, hold, steps
 
 # A key shaped like one and belonging to nobody.
 KEY = "not-a-real-key-0000"
@@ -134,6 +135,55 @@ def test_nothing_is_held_past_the_hour_even_unasked_for():
     assert kitchen.held() == 1
     clock.forward(steps.HOLD_SECONDS)
     assert kitchen.held() == 0
+
+
+def test_the_hour_at_the_stove_runs_off_a_clock_and_not_off_the_next_question():
+    # The board keeps one stove for the life of the process, and a Wednesday
+    # nobody cooks on asks it nothing: a hold swept only when somebody opens a
+    # meal would keep Tuesday's method resident for as long as that lasts,
+    # which is not what the terms cap (docs/db.md). The hold is read directly
+    # because every way of asking it sweeps as a side effect of being asked,
+    # and sweeping is the thing under test.
+    kitchen, _, clock = wired(sweep_every=0.01)
+    kitchen.method(9001)
+    kept = kitchen._kept
+    assert isinstance(kept, hold.Hold)
+    clock.forward(steps.HOLD_SECONDS)
+    waited = time.monotonic() + 5
+    while kept._kept and time.monotonic() < waited:
+        time.sleep(0.01)
+    assert kept._kept == {}
+    kitchen.stop()
+
+
+def test_the_points_spent_at_the_pan_reach_the_ledger(monkeypatch):
+    # A stove lives for the process and a connection lives for one request, so
+    # the recorder arrives with the question. A fetch nobody counted is a
+    # planning run told it has a day's quota it has already spent.
+    service = Service()
+    monkeypatch.setattr(steps, "Spoonacular",
+                        lambda **wired_with: client.Spoonacular(
+                            key=KEY, opener=service, **wired_with))
+    kitchen = steps.Stove(clock=Clock())
+    spent = []
+    kitchen.method(9001, lambda points, calls: spent.append((points, calls)))
+    assert spent == [(1.01, 1)]
+    # The hold spends nothing, so it records nothing.
+    kitchen.method(9001, lambda points, calls: spent.append((points, calls)))
+    assert len(spent) == 1
+
+
+def test_a_refusal_at_the_pan_reaches_the_ledger_too(monkeypatch):
+    # The service was reached and answered, so the attempt is counted whatever
+    # it answered: a run that reads the ledger should see the asking.
+    service = Service(fixtures.quota_exhausted_error())
+    monkeypatch.setattr(steps, "Spoonacular",
+                        lambda **wired_with: client.Spoonacular(
+                            key=KEY, opener=service, **wired_with))
+    kitchen = steps.Stove(clock=Clock())
+    spent = []
+    assert kitchen.method(9001, lambda points, calls: spent.append((points, calls))).trouble
+    assert spent == [(0.0, 1)]
 
 
 def test_a_hold_longer_than_the_hour_cannot_be_asked_for():

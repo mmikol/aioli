@@ -21,6 +21,7 @@ from kitchen import pantry
 from matching.ingredients import PantryItem, RecipeIngredient
 from planner import groceries, week
 from recipes import client, fixtures
+from recipes.hold import HOLD_SECONDS, Hold
 
 # A Monday, written down rather than computed, so the suite does not plan a
 # different week depending on the day it is run.
@@ -77,6 +78,19 @@ class Dishes:
         if self.error is not None and (self.after is None or len(self.asked) > self.after):
             raise self.error
         return self.dishes[recipe_id]
+
+
+class Clock:
+    """A clock the test moves by hand, because an hour is not worth waiting."""
+
+    def __init__(self, now=1000.0):
+        self.now = now
+
+    def __call__(self):
+        return self.now
+
+    def forward(self, seconds):
+        self.now += seconds
 
 
 def wants(meal, *lines, aisles=None):
@@ -412,6 +426,25 @@ def test_a_list_that_could_not_be_built_does_not_read_as_nothing_to_buy(db, monk
     assert "the week is cooked from what is already in the house" not in page
 
 
+def test_a_list_the_quota_cut_short_does_not_say_the_house_has_everything():
+    # The dish that was fetched happens to be covered by the pantry, which is
+    # the expected case for a pantry-led planner, so the list is empty and
+    # seven dinners are missing from it. The reassurance is the last line a
+    # person reads before an aisle, and it is read off `unknown`.
+    cut_short = groceries.Groceries(
+        dishes=1, unknown=(2, 3, 4, 5, 6, 7, 8),
+        held=(groceries.Line("notional chickpeas"),),
+        note="the list is made from 1 dish; 7 could not be looked up")
+    said = plan_pages._summary(cut_short)
+    assert "the week is cooked from what is already in the house" not in said
+    assert "short of 7 meals" in said
+
+
+def test_a_list_that_is_whole_and_empty_still_says_the_house_has_everything():
+    found = groceries.Groceries(dishes=3, held=(groceries.Line("notional chickpeas"),))
+    assert "the week is cooked from what is already in the house" in plan_pages._summary(found)
+
+
 @pytest.mark.database
 def test_a_week_the_house_can_already_cook_says_so(db, monkeypatch):
     pantry.add_staple(db, "notional chickpeas")
@@ -422,6 +455,49 @@ def test_a_week_the_house_can_already_cook_says_so(db, monkeypatch):
     monkeypatch.setattr(groceries, "Spoonacular", lambda **kwargs: Dishes())
     page = plan_pages.groceries_page(db, {}, today=MONDAY)
     assert "the week is cooked from what is already in the house" in page
+
+
+@pytest.mark.database
+def test_a_list_read_again_inside_the_hour_spends_nothing(db, monkeypatch):
+    # A phone left on the list in an aisle, a pull-to-refresh, a tap back from
+    # the week: each of those renders the page again, and a lookup per dish
+    # per render would take a day's points in six loads (pm/backlog.md).
+    stock(db)
+    a_week(db)
+    spoon = Dishes()
+    monkeypatch.setattr(groceries, "Spoonacular", lambda **kwargs: spoon)
+    first = plan_pages.groceries_page(db, {}, today=MONDAY)
+    again = plan_pages.groceries_page(db, {}, today=MONDAY)
+    assert spoon.asked == [9001, 9002]
+    assert first == again
+
+
+@pytest.mark.database
+def test_the_list_lets_go_of_a_dish_at_the_hour(db, monkeypatch):
+    # The hour is the terms' and it is not negotiable: past it the dish is
+    # fetched again rather than answered from memory (docs/db.md).
+    stock(db)
+    row = a_week(db)
+    clock = Clock()
+    monkeypatch.setattr(groceries, "HELD", Hold(clock=clock, sweep_every=3600))
+    spoon = Dishes()
+    groceries.for_plan(db, row["id"], spoon)
+    clock.forward(HOLD_SECONDS)
+    groceries.for_plan(db, row["id"], spoon)
+    assert spoon.asked == [9001, 9002, 9001, 9002]
+
+
+@pytest.mark.database
+def test_a_list_every_dish_of_which_is_held_needs_no_key(db, monkeypatch):
+    # The client is built at the first call out and not before, so a board
+    # whose key has gone still renders what it already has.
+    stock(db)
+    row = a_week(db)
+    groceries.for_plan(db, row["id"], Dishes())
+    monkeypatch.delenv("SPOONACULAR_KEY", raising=False)
+    found = groceries.for_plan(db, row["id"])
+    assert found.buy
+    assert not found.unknown
 
 
 @pytest.mark.database

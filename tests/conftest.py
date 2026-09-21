@@ -37,6 +37,21 @@ def _with_timeout(url, seconds=3):
     return url + ("&" if "?" in url else "?") + "connect_timeout=%d" % seconds
 
 
+@pytest.fixture(autouse=True)
+def nothing_held():
+    """Every test starts and ends with the grocery list's hold empty.
+
+    The hold is process-wide by design - a reload inside the hour has to be
+    free - so a test that left one full would be answering the next test's
+    question with the last test's invented dish.
+    """
+    from planner import groceries
+
+    groceries.HELD.forget()
+    yield
+    groceries.HELD.forget()
+
+
 @pytest.fixture
 def db():
     """A migrated schema of its own, thrown away when the test ends.

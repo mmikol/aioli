@@ -9,10 +9,14 @@ What the terms do allow is an hour, and an hour is what a person at a stove
 happens to want: the page is reloaded, a phone locks and is woken, and none
 of that should spend a point or wait on the network. So this module is one
 call to `information` with a small hold in front of it. The hold is memory and
-nothing else - no table, no file, no log line - and it is bounded twice, by age
-and by count, because a dict keyed by recipe id with nothing taking from it
-grows for as long as the process lives and the host is a 16 GB machine running
-PostgreSQL beside it.
+nothing else - no table, no file, no log line - and the hour it keeps is
+recipes/hold.py's, swept on a clock so that a quiet process is held to it too.
+
+A point spent here is a point the ledger has to hear about. The board holds
+one stove for the life of the process and a connection lives for one request,
+so the recorder is handed in per fetch rather than built into the client:
+a method fetched at the pan that nothing counted is a planning run told it has
+a day's quota it has already spent (recipes/client.py).
 
 Failing here costs more trust than failing anywhere else, and that is the
 reason this module has the shape it does. Every other failure in this system
@@ -26,24 +30,15 @@ import html
 import re
 import threading
 import time
-from collections import OrderedDict
 from dataclasses import dataclass, replace
 
 from matching.ingredients import RecipeIngredient
 from recipes.client import MissingKey, QuotaExhausted, Spoonacular, SpoonacularError
+from recipes.hold import HELD_AT_MOST, HOLD_SECONDS, SWEEP_SECONDS, Hold
 
-# The terms cap a cache at an hour, so an hour is the ceiling. It is enforced
-# rather than configured: a caller may ask for less and the constructor quietly
-# refuses more, because the one number in this file that is somebody else's
-# rule should not be reachable by a keyword argument.
-HOLD_SECONDS = 3600
-
-# Thirty-two methods at once. A week is fourteen meals, so this is two weeks
-# of opened ones; a held method is a few kilobytes of text, which makes a full
-# hold tens of kilobytes. The number matters less than the fact that there is
-# one: an unbounded dict keyed by recipe id is a leak on a host that is also
-# running a database.
-HELD_AT_MOST = 32
+# The hour, the count and the sweep are recipes/hold.py's, named here as well
+# because they are what a caller of this module asks about. The ceiling is the
+# terms' rule and a hold refuses more than an hour whatever it is handed.
 
 _TAG = re.compile(r"<[^>]+>")
 _BREAK = re.compile(r"</li\s*>|</p\s*>|<br\s*/?>|\n", re.IGNORECASE)
@@ -111,24 +106,27 @@ class Stove:
     with no key still starts and still shows the week - only the steps are
     missing.
 
-    `clock` returns seconds and has to be monotonic. The default is
-    `time.monotonic` and not `time.time` because a wall clock steps - NTP
-    corrects it, a laptop wakes - and a hold measured against a clock that
-    can move backwards is a hold that can outlive the hour the terms allow.
-    Tests hand in their own and never wait.
+    `clock` returns seconds and has to be monotonic; it is the hold's, and
+    tests hand in their own so the hour is tested by moving it rather than by
+    waiting one out.
     """
 
-    def __init__(self, chef=None, *, clock=time.monotonic,
-                 hold_seconds=HOLD_SECONDS, hold_at_most=HELD_AT_MOST):
+    def __init__(self, chef=None, *, clock=time.monotonic, hold_seconds=HOLD_SECONDS,
+                 hold_at_most=HELD_AT_MOST, sweep_every=SWEEP_SECONDS):
         self._chef = chef
-        self._clock = clock
-        self._hold_seconds = max(0.0, min(float(hold_seconds), float(HOLD_SECONDS)))
-        self._hold_at_most = max(1, int(hold_at_most))
-        self._kept: OrderedDict[int, tuple[float, Method]] = OrderedDict()
+        self._kept = Hold(clock=clock, hold_seconds=hold_seconds,
+                          hold_at_most=hold_at_most, sweep_every=sweep_every)
         self._lock = threading.Lock()
+        self._spending = None
 
-    def method(self, recipe_id) -> Method:
+    def method(self, recipe_id, usage=None) -> Method:
         """What is at the stove for this recipe: the hold if it is fresh, the service if not.
+
+        `usage` is the ledger's recorder for this request, as
+        `recipes.client.usage_into` makes one from a connection. It is bound
+        for the length of the fetch and let go again, because a stove lives
+        for the process and a connection lives for one request. A held method
+        spends nothing, so nothing is recorded for it.
 
         The lock spans the fetch on purpose. The board is threaded, so two
         tabs opening the same meal would otherwise spend two points for one
@@ -137,16 +135,16 @@ class Stove:
         """
         key = int(recipe_id)
         with self._lock:
-            self._sweep()
             found = self._kept.get(key)
             if found is not None:
-                # Asking again says which meal is being cooked, so the one
-                # asked for is the last to be pushed out.
-                self._kept.move_to_end(key)
-                return found[1]
-            answer = self._fetch(key)
+                return found
+            self._spending = usage
+            try:
+                answer = self._fetch(key)
+            finally:
+                self._spending = None
             if answer.ok:
-                self._keep(key, answer)
+                self._kept.put(key, answer)
             # A failure is never held. A service down for a minute must not
             # read as an hour of blankness to somebody at the pan, and asking
             # again after a refusal costs nothing.
@@ -154,9 +152,7 @@ class Stove:
 
     def held(self) -> int:
         """How many methods are being held, once what has expired is gone."""
-        with self._lock:
-            self._sweep()
-            return len(self._kept)
+        return len(self._kept)
 
     def forget(self, recipe_id=None) -> None:
         """Drop one held method, or all of them.
@@ -164,32 +160,20 @@ class Stove:
         The terms say everything obtained goes when the key does, so saying
         it has to be one call and not a walk over a dict nobody else can see.
         """
-        with self._lock:
-            if recipe_id is None:
-                self._kept.clear()
-            else:
-                self._kept.pop(int(recipe_id), None)
+        self._kept.forget(None if recipe_id is None else int(recipe_id))
 
-    def _sweep(self) -> None:
-        """Drop everything past the hour, whether or not anybody asked for it.
+    def stop(self) -> None:
+        """Let the hour go and drop what is held. What a process says on its way out."""
+        self._kept.stop()
 
-        Expiring only on a lookup answers correctly and still leaves the text
-        in memory until thirty-two newer methods push it out, which is longer
-        than the terms allow. Walking a bound this small costs nothing, and
-        it makes the hour true of the process rather than only of its
-        answers.
+    def _record(self, points, calls) -> None:
+        """Hand a fetch's cost to the recorder bound for it, if there is one.
+
+        The client is built once and the ledger is written per request, so
+        what a call cost is passed on rather than kept here.
         """
-        now = self._clock()
-        stale = [key for key, (at, _) in self._kept.items() if now - at >= self._hold_seconds]
-        for key in stale:
-            del self._kept[key]
-
-    def _keep(self, key, answer) -> None:
-        """Hold one answer, pushing out the least recently wanted at the bound."""
-        self._kept[key] = (self._clock(), answer)
-        self._kept.move_to_end(key)
-        while len(self._kept) > self._hold_at_most:
-            self._kept.popitem(last=False)
+        if self._spending is not None:
+            self._spending(points, calls)
 
     def _fetch(self, recipe_id) -> Method:
         """One call out, with every way it can fail turned into a sentence."""
@@ -216,9 +200,14 @@ class Stove:
         return _read(recipe_id, payload)
 
     def _client(self):
-        """The client, built at the first fetch and not before."""
+        """The client, built at the first fetch and not before.
+
+        Wired to `_record`, so every point this stove spends reaches whichever
+        ledger the request that asked for it is writing to. A client handed in
+        by a caller keeps the recorder that caller gave it.
+        """
         if self._chef is None:
-            self._chef = Spoonacular()
+            self._chef = Spoonacular(usage=self._record)
         return self._chef
 
 

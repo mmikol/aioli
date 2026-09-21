@@ -9,6 +9,12 @@ not bend for a convenience. The list is a function of the plan, the pantry
 and one pass of lookups, so it can be built again at any time and nothing
 goes stale in a table nobody purges.
 
+Computed again, though, is not the same as fetched again. A list is read in an
+aisle, pocketed and read again three shelves later, and a lookup per dish per
+render would spend a day's points on a phone left on a counter. So the
+lookups go through the hour the terms do allow (recipes/hold.py): held in
+memory, bounded by age and by count, written nowhere.
+
 Three answers rather than two, because matching/ingredients.py already models
 them. What the house holds is not bought. What it plainly does not hold is
 bought. What resembles something on the shelf without anybody having said so
@@ -36,6 +42,7 @@ from matching.ingredients import PantryItem, RecipeIngredient, cover, normalise_
 from matching.units import convert, normalise_unit
 from planner import week
 from recipes.client import MissingKey, QuotaExhausted, Spoonacular, SpoonacularError, usage_into
+from recipes.hold import Hold
 
 # Where a line goes when nothing says which part of a shop it belongs in.
 ELSEWHERE = "the rest"
@@ -59,6 +66,18 @@ PER_RECIPE = 40
 # What counts as the same amount, in the units the arithmetic lands in. Below
 # this a line is short of nothing and the household is not sent out for it.
 CRUMB = 1e-9
+
+# One hold for the life of the process, in front of the lookups. The list is
+# rebuilt on every render - a phone left on it in an aisle, a pull-to-refresh,
+# a tap back and forth between the week and the list - and each render would
+# otherwise spend a point per dish against a free tier of fifty a day. Six
+# loads would take the whole day's quota, and the person it is taken from is
+# whoever opens a meal at the stove that evening (pm/backlog.md).
+#
+# It holds the service's words, so it holds them the way recipes/steps.py
+# does: the hour the terms allow, bounded by count as well, in memory and
+# written nowhere (docs/db.md).
+HELD = Hold()
 
 
 @dataclass(frozen=True)
@@ -327,30 +346,38 @@ def _nothing_pointed_at(row, meals):
 def _look_up(cx, client, cooks):
     """Each distinct dish once, and what it cost to find out it could not be had.
 
+    A dish held from an earlier render costs nothing and does not count
+    against the ceiling: the whole point of the hold is that reading the list
+    again inside the hour is free.
+
     A refusal stops the looking rather than being tried eight times: no key is
     no key, and a spent quota is spent for the rest of the day, so the calls
     after the first would buy nothing but a slower page. What came back before
     it is kept, because most of a list is worth carrying and the meals that
     are missing from it are named.
-    """
-    try:
-        client = client or Spoonacular(usage=usage_into(cx))
-    except MissingKey as refusal:
-        return (), tuple(meal["id"] for meal in cooks), _why(refusal)
 
-    dishes, wanted, unknown, refusal = {}, [], [], None
+    The client is built at the first call out and not before, so a list every
+    dish of which is held still renders on a board with no key set.
+    """
+    dishes, wanted, unknown, refusal, spent = {}, [], [], None, 0
     for meal in cooks:
         recipe_id = meal["recipe_id"]
         if recipe_id not in dishes:
-            if refusal is not None or len(dishes) >= MOST_LOOKUPS:
-                unknown.append(meal["id"])
-                continue
-            try:
-                dishes[recipe_id] = ingredients_of(client.information(recipe_id))
-            except SpoonacularError as bad:
-                refusal = _why(bad)
-                unknown.append(meal["id"])
-                continue
+            found = HELD.get(recipe_id)
+            if found is None:
+                if refusal is not None or spent >= MOST_LOOKUPS:
+                    unknown.append(meal["id"])
+                    continue
+                try:
+                    client = client or Spoonacular(usage=usage_into(cx))
+                    found = ingredients_of(client.information(recipe_id))
+                except SpoonacularError as bad:
+                    refusal = _why(bad)
+                    unknown.append(meal["id"])
+                    continue
+                spent += 1
+                HELD.put(recipe_id, found)
+            dishes[recipe_id] = found
         lines, aisles = dishes[recipe_id]
         wanted.append(Wanted(meal["id"], lines, aisles))
     return tuple(wanted), tuple(unknown), refusal

@@ -18,6 +18,12 @@ up per cook, and a page that spent quota on every reload would spend a day's
 points on a phone left open on a counter (pm/backlog.md). So the week costs
 nothing to look at and says plainly what asking will cost.
 
+The list's own page is not gated the same way: it is the page that goes to the
+shop, and asking for it twice in an aisle is once too many. What holds it to
+the same rule is the hour planner/groceries.py keeps a dish for - the first
+reading pays for the week, and a reload, a pull-to-refresh or a tap back from
+the week inside that hour costs nothing at all.
+
 Nothing the service authored is stored by either view. What is shown is the
 household's own: the plan's dates and slots, the pantry's names, and - where
 a wording matched nothing in the house - that wording reduced to the thing
@@ -278,9 +284,19 @@ def _summary(shopping):
         # that could not be built look identical on a phone and mean opposite
         # things, so only one of them gets to say the house has everything.
         return "".join(said)
-    if shopping.empty:
+    if shopping.unknown:
+        # A list can be complete in what it holds and short of half the week:
+        # the dishes that were fetched may well be covered by the pantry while
+        # the ones that refused are the seven dinners nobody is shopping for.
+        # That is read off `unknown` and never off what is on the list.
+        said.append("<p class='needs-answer'>this list is short of %d %s:"
+                    " what they want is not on it.</p>"
+                    % (len(shopping.unknown),
+                       "meal" if len(shopping.unknown) == 1 else "meals"))
+    elif shopping.empty:
         said.append("<p class='quiet'>nothing to buy: the week is cooked"
                     " from what is already in the house.</p>")
+    if shopping.empty:
         return "".join(said)
     said.append(
         "<p class='quiet'>%d to buy, %d to ask about. %d of them more than one meal wants,"

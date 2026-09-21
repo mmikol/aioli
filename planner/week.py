@@ -20,10 +20,16 @@ ingredient wordings, on their way into the matcher - are held for the length
 of a call and written nowhere.
 """
 import datetime
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 from kitchen import moves, pantry, settings
-from matching.ingredients import PantryItem, RecipeIngredient, alias_index, cover
+from matching.ingredients import (
+    PantryItem,
+    RecipeIngredient,
+    alias_index,
+    cover,
+    normalise_name,
+)
 from matching.units import Conversion
 from recipes.client import MissingKey, QuotaExhausted, Spoonacular, SpoonacularError, usage_into
 
@@ -31,6 +37,11 @@ LUNCH, DINNER = "lunch", "dinner"
 SLOTS = (LUNCH, DINNER)
 
 COOK, LEFTOVERS = "cook", "leftovers"
+
+# Which pass a dish came back from. The pantry pass filters on a ready time
+# and on a yield; the use-it-up pass filters on neither and answers neither,
+# so both facts have to follow the candidate to the day it is placed on.
+PANTRY, TURNING = "pantry", "turning"
 
 DRAFT, LIVE, CLOSED, UNFILLED = "draft", "live", "closed", "unfilled"
 
@@ -85,7 +96,9 @@ ONE_SITTING = "cooked for one sitting: nothing in the week follows it"
 # negative of what the basket comes to - and nothing that calls `score`
 # changes. Prices are deferred; this seam is not (pm/backlog.md). A weight for
 # a term that does not exist yet is simply not applied, so the two halves may
-# land in either order.
+# land in either order. The basket the buying term reads is the one a cost
+# term wants, and it is threaded through `terms` for that reason: a price
+# charged per dish would bill every ingredient two dishes share twice.
 WEIGHTS = {"pantry": 1.0, "buying": 0.5}
 
 # settings.cook_days and settings.shop_days are deliberately not read here.
@@ -101,15 +114,31 @@ WEIGHTS = {"pantry": 1.0, "buying": 0.5}
 class Candidate:
     """One dish the search offered, decided against this kitchen.
 
-    `uses` is the household's own names for what it covers and `to_buy` is a
-    count, so nothing the service authored survives the parse. The recipe id
-    is a pointer and the only thing here that ever reaches a table.
+    `uses` and `buy` are both the household's own names - what the pantry
+    answers and what it does not - so nothing the service authored survives
+    the parse. The recipe id is a pointer and the only thing here that ever
+    reaches a table.
+
+    `buy` carries names rather than a count because a count cannot be shared
+    between two dishes and a name can: a week that buys one lemon for two
+    dinners is the overlap the planner is rewarded for (pm/backlog.md), and a
+    count leaves the objective unable to see the basket.
+
+    `servings` is what the dish yields where the search says. The pantry pass
+    filters on it and the use-it-up pass neither filters nor answers, so an
+    unknown yield is what `_feeds_twice` reads.
     """
     recipe_id: int
     uses: tuple[str, ...] = ()
-    to_buy: int = 0
+    buy: tuple[str, ...] = ()
     ready_limit: int | None = None
-    found_by: str = "pantry"
+    found_by: str = PANTRY
+    servings: int | None = None
+
+    @property
+    def to_buy(self) -> int:
+        """How many of this dish's lines the pantry cannot answer."""
+        return len(self.buy)
 
 
 @dataclass(frozen=True)
@@ -190,24 +219,29 @@ def next_monday(today=None):
     return monday_of(today) + datetime.timedelta(days=DAYS)
 
 
-def terms(candidate, urgency):
+def terms(candidate, urgency, basket=()):
     """The objective, term by term, for one dish against what is left of the pantry.
 
     `urgency` is what each pantry name is still worth: a name an earlier dish
     already claimed is worth nothing, so two dishes cannot both be paid for
     consuming the same spinach.
+
+    `basket` is what the week is already carrying home. A line another dish
+    has already put on the list is a line this one costs nothing for, so the
+    term charges what the week is not already buying and the dish that shares
+    a lemon wins against the dish that wants a lemon of its own.
     """
     return {
         "pantry": sum(urgency.get(name, 0.0) for name in candidate.uses),
-        "buying": -float(candidate.to_buy),
+        "buying": -float(sum(1 for name in candidate.buy if name not in basket)),
     }
 
 
-def score(candidate, urgency, weights=None):
+def score(candidate, urgency, weights=None, basket=()):
     """One number for a dish. Higher is a better week."""
     weights = WEIGHTS if weights is None else weights
     return sum(weights.get(name, 0.0) * value
-               for name, value in terms(candidate, urgency).items())
+               for name, value in terms(candidate, urgency, basket).items())
 
 
 def plan(cx, client=None, *, start=None, today=None, skipped=(), pool=POOL):
@@ -238,13 +272,15 @@ def plan(cx, client=None, *, start=None, today=None, skipped=(), pool=POOL):
     try:
         if client is None:
             client = Spoonacular(usage=usage_into(cx))
-        candidates = _candidates(cx, client, caps, servings, today, pool)
+        candidates, aside = _candidates(cx, client, caps, servings, today, pool)
     except SpoonacularError as refusal:
         return _bare(days, struck, _why(refusal))
     if not candidates:
         return _bare(days, struck, "nothing came back that this kitchen can cook")
 
-    return _assemble(cx, days, struck, kinds, eats, candidates, caps_by_day, servings, today)
+    planned = _assemble(cx, days, struck, kinds, eats, candidates,
+                        caps_by_day, servings, today)
+    return planned if not aside else replace(planned, note="%s; %s" % (planned.note, aside))
 
 
 def save(cx, week, run_id=None, state=None):
@@ -256,6 +292,12 @@ def save(cx, week, run_id=None, state=None):
     """
     state = state or (UNFILLED if week.empty else DRAFT)
     with cx.transaction():
+        # Every week planned closes the weeks that are over. The purge belongs
+        # on a clock and the clock is the scheduler, which is an item below
+        # this one (pm/backlog.md); until it exists, a promise with no caller
+        # is a promise nobody keeps, and the pointers pile up a week at a time
+        # on plans whose period ended a month ago (docs/db.md).
+        close_passed(cx, today=week.starts_on)
         row = cx.execute(
             "insert into plan (period, starts_on, ends_on, state, run_id, note)"
             " values (%s, %s, %s, %s, %s, %s) returning *",
@@ -329,6 +371,32 @@ def close(cx, plan_id):
             " where plan_id = %s and recipe_id is not null", (plan_id,)).rowcount
         cx.execute("update plan set state = %s, closed_at = now() where id = %s",
                    (CLOSED, plan_id))
+        return purged
+
+
+def close_passed(cx, today=None):
+    """Close every plan whose period has ended. Returns how many pointers went.
+
+    docs/db.md permits the recipe id on a live row and promises it is purged
+    when the period closes. Nothing was closing anything: the scheduler that
+    would do it on a clock is an after-MVP item, so the purge rides the two
+    things that do happen today - a week being planned above, and the board
+    starting (board/serve.py). A month of use would otherwise leave eight
+    pointers a week on weeks that ended weeks ago, all of them still readable
+    by anybody who kept the link.
+
+    A week still being eaten is not touched, and neither is one already
+    closed: `ends_on` behind today is the whole test, and it is the
+    household's today rather than the database's.
+    """
+    today = _as_date(today or datetime.date.today())
+    with cx.transaction():
+        purged = cx.execute(
+            "update plan_meal set recipe_id = null where recipe_id is not null"
+            " and plan_id in (select id from plan where ends_on < %s and state <> %s)",
+            (today, CLOSED)).rowcount
+        cx.execute("update plan set state = %s, closed_at = now()"
+                   " where ends_on < %s and state <> %s", (CLOSED, today, CLOSED))
         return purged
 
 
@@ -410,13 +478,18 @@ def _assemble(cx, days, struck, kinds, eats, candidates, caps_by_day, servings, 
     """
     urgency = _urgency(cx, today)
     most = max(caps_by_day[day] for (day, _), how in kinds.items() if how == COOK)
+    claimed = set(eats.values())
     # `summed` is not seeded with the term names on purpose: a term added
-    # later lands in it by being returned from `terms`.
-    chosen, taken, total, summed = {}, set(), 0.0, {}
+    # later lands in it by being returned from `terms`. `basket` is the week's
+    # own accumulator beside `urgency`: one says what the pantry has left to
+    # give and the other says what the list already carries.
+    chosen, taken, total, summed, basket = {}, set(), 0.0, {}, set()
     for key in sorted((cook for cook, how in kinds.items() if how == COOK),
                       key=lambda cook: (cook[0], SLOTS.index(cook[1]))):
         cap = caps_by_day[key[0]]
-        fits = [each for each in candidates if _fits(each, cap, most)]
+        fits = [each for each in candidates
+                if _fits(each, cap, most)
+                and (key not in claimed or _feeds_twice(each, servings))]
         fresh = [each for each in fits if each.recipe_id not in taken]
         # A dish comes round again only when the pool is spent: an empty
         # Thursday is worse than a repeat, and the cooldown that would rule on
@@ -425,16 +498,17 @@ def _assemble(cx, days, struck, kinds, eats, candidates, caps_by_day, servings, 
         fits = fresh or fits
         if not fits:
             continue
-        best = max(fits, key=lambda each: (score(each, urgency), -each.to_buy, -each.recipe_id))
+        best = max(fits, key=lambda each: (score(each, urgency, basket=basket),
+                                           -each.to_buy, -each.recipe_id))
         chosen[key] = best
         taken.add(best.recipe_id)
-        for name, value in terms(best, urgency).items():
+        for name, value in terms(best, urgency, basket).items():
             summed[name] = summed.get(name, 0.0) + value
-        total += score(best, urgency)
+        total += score(best, urgency, basket=basket)
         for name in best.uses:
             urgency[name] = 0.0
+        basket.update(best.buy)
 
-    claimed = set(eats.values())
     meals, position, blank = [], {}, 0
     for day in days:
         for slot in SLOTS:
@@ -495,7 +569,7 @@ def _why(refusal):
 
 
 def _candidates(cx, client, caps, servings, today, pool):
-    """The dishes to choose from: the pantry pass, then the use-it-up pass.
+    """The dishes to choose from, and what to say about a search that refused.
 
     The first pass is complexSearch with what is in stock and fillIngredients
     on, once per distinct ready-time cap, because a search cannot filter two
@@ -506,27 +580,75 @@ def _candidates(cx, client, caps, servings, today, pool):
     `min_servings` is two sittings' worth: a dish that cannot yield that
     cannot be cooked once and eaten twice. Scaling a four-serving recipe down
     to a household of one is its own item and is not attempted here.
+
+    Each call out is guarded on its own. A refusal on one of them - a 402 on
+    the last pass, a blip on the network - used to throw away every dish the
+    calls before it had already returned, along with the points they cost, and
+    hand back a week saying no dish could be looked up while two dozen sat in
+    hand. So a failure is collected and the week carries on with what it has;
+    only a pass that leaves nothing at all raises, and then the week says why.
     """
     filters = settings.recipe_filters(cx)
-    urgent = [row["ingredient"] for row in pantry.turning_soonest(
-        cx, within_days=URGENT_WITHIN_DAYS, limit=SEARCH_INGREDIENTS, today=today)]
+    urgent = _distinct(row["ingredient"] for row in pantry.turning_soonest(
+        cx, within_days=URGENT_WITHIN_DAYS, limit=SEARCH_INGREDIENTS, today=today))
     include = _search_terms(urgent, pantry.ingredient_names(cx))
     held, aliases, conversions = _pantry_items(cx), _aliases(cx), _conversions(cx)
 
-    found = []
+    found, refusals = [], []
     for cap in caps:
-        payload = client.complex_search(
-            include_ingredients=include,
-            exclude_ingredients=filters["exclude_ingredients"],
-            diet=filters["diet"], intolerances=filters["intolerances"],
-            max_ready_time=cap, min_servings=servings * 2, number=PER_SEARCH)
-        found.extend(_read_results(cx, _results(payload), cap, "pantry",
+        try:
+            payload = client.complex_search(
+                include_ingredients=include,
+                exclude_ingredients=filters["exclude_ingredients"],
+                diet=filters["diet"], intolerances=filters["intolerances"],
+                max_ready_time=cap, min_servings=servings * 2, number=PER_SEARCH)
+        except SpoonacularError as refusal:
+            refusals.append(refusal)
+            continue
+        found.extend(_read_results(cx, _results(payload), cap, PANTRY,
                                    held, aliases, conversions))
     if urgent:
-        payload = client.find_by_ingredients(urgent, number=PER_SEARCH)
-        found.extend(_read_results(cx, _results(payload), None, "turning",
-                                   held, aliases, conversions))
-    return _deduplicate(found, pool)
+        try:
+            payload = client.find_by_ingredients(urgent, number=PER_SEARCH)
+        except SpoonacularError as refusal:
+            refusals.append(refusal)
+        else:
+            found.extend(_read_results(cx, _results(payload), None, TURNING,
+                                       held, aliases, conversions))
+    if not found and refusals:
+        raise refusals[0]
+    return _deduplicate(found, pool), _aside(refusals)
+
+
+def _aside(refusals):
+    """What a planned week says about a search that would not answer.
+
+    The searches that did answer are dishes enough to cook a week from, and
+    the points they cost are spent whatever happens next, so a refusal comes
+    back as a sentence on the note. The week was narrower for it and the
+    person reading the board is owed that much.
+    """
+    if not refusals:
+        return ""
+    return ("one of the searches was refused, so there was less to choose from - %s"
+            % _why(refusals[0]))
+
+
+def _distinct(names):
+    """One entry per name, in the order they arrive.
+
+    `turning_soonest` answers one row per lot and a search term is one word
+    per thing, so three lots of chicken are one term rather than three of the
+    twelve the query is capped at. Compared lowercased, the way
+    `pantry.ingredient_names` groups them.
+    """
+    found, seen = [], set()
+    for name in names:
+        key = name.strip().lower()
+        if key and key not in seen:
+            seen.add(key)
+            found.append(name)
+    return found
 
 
 def _read_results(cx, results, cap, found_by, held, aliases, conversions):
@@ -544,11 +666,35 @@ def _read_results(cx, results, cap, found_by, held, aliases, conversions):
             continue
         coverage = cover(_needs(result), held, aliases=aliases, conversions=conversions)
         uses = tuple(sorted({need.ingredient for need in coverage.covered if need.ingredient}))
-        # An uncertain line counts as something to buy until somebody answers
-        # it. That is the direction that does not plan a week against a
-        # kitchen nobody has (matching/ingredients.py).
-        to_buy = len(coverage.missing) + len(coverage.uncertain)
-        yield Candidate(result["id"], uses, to_buy, cap, found_by)
+        yield Candidate(result["id"], uses, _buying(coverage), cap, found_by,
+                        _whole(result.get("servings")))
+
+
+def _buying(coverage):
+    """What a dish would have to be bought for, by name and without repeats.
+
+    An uncertain line counts as something to buy until somebody answers it.
+    That is the direction that does not plan a week against a kitchen nobody
+    has (matching/ingredients.py).
+
+    The household's own name where `cover` settled one, the wording reduced to
+    the thing itself where it did not - the same reduction the grocery list
+    names a line by, so the planner is buying against the list a person will
+    actually carry, and neither keeps a word the service authored.
+    """
+    names = []
+    for need in tuple(coverage.missing) + tuple(coverage.uncertain):
+        name = need.ingredient or normalise_name(need.wording) or need.wording.strip()
+        if name and name not in names:
+            names.append(name)
+    return tuple(names)
+
+
+def _whole(value):
+    """A yield the service sends as an int, as a float, or not at all."""
+    if isinstance(value, bool) or not isinstance(value, int | float):
+        return None
+    return int(round(value))
 
 
 def _needs(result):
@@ -612,6 +758,22 @@ def _fits(candidate, cap, most):
     return candidate.ready_limit <= cap
 
 
+def _feeds_twice(candidate, servings):
+    """Whether a dish may be cooked for a sitting that another meal follows.
+
+    complexSearch is asked for `min_servings` of two sittings' worth, so a
+    dish from the pantry pass yields them or it would not be here.
+    findByIngredients takes no such filter and returns no yield at all, so a
+    dish from the use-it-up pass gets the treatment its unknown ready time
+    gets: it goes where nothing follows it. Promising a second helping off a
+    dish that serves one is a lunch nobody can eat, and the schema says the
+    batch is the cook's servings plus the portion's (003-the-week.sql).
+    """
+    if candidate.servings is not None:
+        return candidate.servings >= servings * 2
+    return candidate.found_by == PANTRY
+
+
 def _urgency(cx, today):
     """What each pantry name is worth to the week, highest for what turns soonest.
 
@@ -619,12 +781,19 @@ def _urgency(cx, today):
     is worth URGENT_WEIGHT. This is the whole of "weighted towards what turns
     soonest", and it is a weight rather than a rule so that a week is never
     forced into a bad dish by one ageing lemon.
+
+    The weight is per name and the rows are per lot, so the lots are taken at
+    their highest rather than in the order they arrive. The rows come back
+    with the furthest-off last, so assigning would let a replacement bought
+    today bury the lot that turns today - the one signal the whole term exists
+    to carry, erased by the act of buying more.
     """
     weights = {row["ingredient"]: 1.0 for row in pantry.in_stock(cx)}
     for row in pantry.turning_soonest(cx, within_days=URGENT_WITHIN_DAYS, today=today):
         left = max(int(row["days_left"]), 0)
         share = (URGENT_WITHIN_DAYS - left) / URGENT_WITHIN_DAYS
-        weights[row["ingredient"]] = 1.0 + (URGENT_WEIGHT - 1.0) * share
+        name = row["ingredient"]
+        weights[name] = max(weights.get(name, 1.0), 1.0 + (URGENT_WEIGHT - 1.0) * share)
     return weights
 
 

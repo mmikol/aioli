@@ -16,6 +16,7 @@ from urllib.parse import parse_qs, urlparse
 
 from board import pages, plan_pages
 from db import psql
+from planner import week
 
 STATIC = pathlib.Path(__file__).parent / "static"
 
@@ -49,6 +50,28 @@ def health():
     return {"status": "ok" if not outstanding else "migrations pending",
             "pending": outstanding,
             "tables": tables}
+
+
+def purge_passed_plans(cx=None):
+    """Close the weeks that are over and purge their recipe pointers.
+
+    Done as the board starts. A pointer is the one thing the service touched
+    that reaches a table at all, and docs/db.md promises it goes when the
+    period closes; the scheduler that would keep that promise on a clock is an
+    item after the MVP (pm/backlog.md). So the two things that do happen carry
+    it: a week being planned, and this process starting. The board runs for
+    weeks at a time and starts rarely, which is exactly why the planner does
+    it as well.
+
+    A connection handed in is the caller's to commit, as every render here is;
+    opened here, it is committed here, because nothing else will.
+    """
+    if cx is not None:
+        return week.close_passed(cx)
+    with psql.connect() as own:
+        purged = week.close_passed(own)
+        own.commit()
+        return purged
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -146,8 +169,11 @@ def main(argv=None):
     ap.add_argument("--host", default="127.0.0.1")
     ap.add_argument("--port", type=int, default=8018)
     args = ap.parse_args(argv)
+    purged = purge_passed_plans()
     server = ThreadingHTTPServer((args.host, args.port), Handler)
     print("the board is on http://%s:%d" % (args.host, args.port), flush=True)
+    if purged:
+        print("%d recipe pointer(s) purged from weeks that are over" % purged, flush=True)
     server.serve_forever()
     return 0
 

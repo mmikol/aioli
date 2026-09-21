@@ -8,8 +8,56 @@ import pytest
 
 from board import pages, serve
 from kitchen import moves, pantry, settings
+from recipes import client, fixtures, steps
 
 TODAY = datetime.date(2026, 9, 20)
+
+
+class Chef:
+    """As much of recipes.client.Spoonacular as the stove calls.
+
+    It records what a call cost the way the real client does, because half of
+    what is asserted below is that the ledger hears about a point spent at the
+    pan. Every word it answers with is invented next door in recipes/fixtures.
+    """
+
+    def __init__(self, payload=None, error=None):
+        self.payload = fixtures.INFORMATION if payload is None else payload
+        self.error = error
+        self.usage = None
+        self.asked = []
+
+    def information(self, recipe_id, *, nutrition=False):
+        self.asked.append(recipe_id)
+        if self.usage is not None:
+            self.usage(0.0 if self.error is not None else 1.01, 1)
+        if self.error is not None:
+            raise self.error
+        return self.payload
+
+
+def _stove(monkeypatch, payload=None, error=None):
+    """The board's stove, wired to a chef that has never been near the service.
+
+    The client is replaced rather than handed in, because the recorder the
+    stove binds to its own client is the thing under test: a point spent
+    while somebody is standing at the pan has to reach `api_usage`.
+    """
+    chef = Chef(payload, error)
+
+    def built(usage=None, **rest):
+        chef.usage = usage
+        return chef
+
+    monkeypatch.setattr(steps, "Spoonacular", built)
+    monkeypatch.setattr(pages, "STOVE", steps.Stove())
+    return chef
+
+
+def _cooking(db):
+    """A pantry holding what the invented method asks for."""
+    pantry.add_perishable(db, "notional chickpeas", 2, "can", 30, acquired_on=TODAY)
+    pantry.add_staple(db, "pretend olive oil")
 
 
 def _q(**fields):
@@ -111,6 +159,27 @@ def test_every_route_is_one_the_board_does_not_already_answer():
     assert len({(route.path, route.method) for route in pages.ROUTES}) == len(pages.ROUTES)
     assert all(callable(route.render) for route in pages.ROUTES)
     assert all(route.method in ("GET", "POST") for route in pages.ROUTES)
+
+
+@pytest.mark.database
+def test_the_board_purges_the_weeks_that_are_over_as_it_starts(db):
+    # A recipe id is a pointer on a live row and goes when the period closes
+    # (docs/db.md). The clock that would keep that promise is an item after
+    # the MVP, so the board does it as it starts and the planner does it as it
+    # plans; a week a person can still reach at /?plan=<id> is not a closed one.
+    over = db.execute(
+        "insert into plan (period, starts_on, ends_on, state)"
+        " values ('2020-W02', %s, %s, 'live') returning *",
+        (datetime.date(2020, 1, 6), datetime.date(2020, 1, 12))).fetchone()
+    _meal(db, over, datetime.date(2020, 1, 7), recipe_id=9001)
+
+    assert serve.purge_passed_plans(db) == 1
+
+    closed = db.execute("select * from plan where id = %s", (over["id"],)).fetchone()
+    assert closed["state"] == "closed"
+    assert closed["closed_at"] is not None
+    assert db.execute("select recipe_id from plan_meal where plan_id = %s",
+                      (over["id"],)).fetchone()["recipe_id"] is None
 
 
 # --- the pantry -----------------------------------------------------------
@@ -475,16 +544,117 @@ def test_answering_no_moves_nothing_at_all(db):
 
 
 @pytest.mark.database
-def test_the_board_brings_no_ingredients_of_its_own_to_a_confirmation(db):
-    # A meal's ingredients are the recipe's words and are not ours to keep, so
-    # the board has no list to subtract: it records the answer, and the stock
-    # follows whoever is holding the method it fetched at the stove.
+def test_a_cook_with_no_pointer_left_is_answered_and_subtracts_nothing(db):
+    # A closed week has had its pointers purged and a week planned without a
+    # key never had one, so there is nothing to fetch and nothing to subtract.
+    # The answer is still worth recording: the question can never be answered
+    # any better than this.
     plan = _plan(db)
     meal = _meal(db, plan, TODAY)
     pantry.add_perishable(db, "spinach", 200, "g", 5, acquired_on=TODAY)
     pages.confirm_answer(db, _q(meal=meal["id"], answer="cooked"))
     assert pantry.find(db, "spinach")["quantity"] == 200
     assert moves.recent(db) == []
+    assert pages.awaiting(db, TODAY) == []
+
+
+@pytest.mark.database
+def test_confirming_a_cook_moves_the_stock_its_method_names(db, monkeypatch):
+    # The button used to stamp `cooked_at` and move nothing at all, and the
+    # meal then dropped out of the confirmations and off the list: nobody was
+    # asked again and the kilo of chicken stayed in the pantry for the planner
+    # to keep scoring a week around (pm/backlog.md).
+    chef = _stove(monkeypatch)
+    plan = _plan(db)
+    meal = _meal(db, plan, TODAY, recipe_id=9001)
+    _cooking(db)
+
+    pages.confirm_answer(db, _q(meal=meal["id"], answer="cooked"))
+
+    assert chef.asked == [9001]
+    assert pantry.find(db, "notional chickpeas")["quantity"] == 1
+    # A staple is a judgement rather than arithmetic: cooking with one moves
+    # it to low and only a person says it is out (kitchen/pantry.py).
+    assert pantry.find(db, "pretend olive oil")["level"] == "low"
+    eaten = db.execute("select * from eating_history order by id").fetchall()
+    assert [row["ingredient"] for row in eaten] == ["notional chickpeas", "pretend olive oil"]
+    # How it was cooked is the keeps-well rules' column and nothing here
+    # classifies one yet; the recipe's own title is not the answer.
+    assert {row["method"] for row in eaten} == {None}
+    assert pages.awaiting(db, TODAY) == []
+
+
+@pytest.mark.database
+def test_the_point_spent_at_the_pan_reaches_the_ledger(db, monkeypatch):
+    # The ledger is what a planning run asks before it starts, so a fetch it
+    # never heard about is a run told it has a day's quota it has spent.
+    _stove(monkeypatch)
+    plan = _plan(db)
+    meal = _meal(db, plan, TODAY, recipe_id=9001)
+    _cooking(db)
+    pages.confirm_answer(db, _q(meal=meal["id"], answer="cooked"))
+    # The ledger counts whole points and the service charges fractions, so a
+    # call rounds up (recipes/client.py).
+    assert client.spent_today(db) == 2
+
+
+@pytest.mark.database
+def test_a_cook_whose_method_cannot_be_had_is_not_marked_done(db, monkeypatch):
+    # A meal silently marked done is worse than one still being asked about:
+    # the stock has not moved and nothing would ever ask again.
+    _stove(monkeypatch, error=client.QuotaExhausted("spent", status=402))
+    plan = _plan(db)
+    meal = _meal(db, plan, TODAY, recipe_id=9001)
+    _cooking(db)
+
+    html = pages.confirm_answer(db, _q(meal=meal["id"], answer="cooked"))
+
+    assert "quota is spent" in html
+    assert "still waiting on an answer" in html
+    assert db.execute("select cooked_at from plan_meal where id = %s",
+                      (meal["id"],)).fetchone()["cooked_at"] is None
+    assert pantry.find(db, "notional chickpeas")["quantity"] == 2
+    assert [each.id for each in pages.awaiting(db, TODAY)] == [meal["id"]]
+
+
+@pytest.mark.database
+def test_the_same_confirmation_twice_cooks_the_meal_once(db, monkeypatch):
+    chef = _stove(monkeypatch)
+    plan = _plan(db)
+    meal = _meal(db, plan, TODAY, recipe_id=9001)
+    _cooking(db)
+    twice = _q(meal=meal["id"], answer="cooked")
+
+    pages.confirm_answer(db, twice)
+    pages.confirm_answer(db, twice)
+
+    assert pantry.find(db, "notional chickpeas")["quantity"] == 1
+    assert len(moves.caused_by(db, "plan_meal:%d" % meal["id"])) == 2
+    # The second answer found the method in the hour the stove holds, so it
+    # spent no point to say the same thing again.
+    assert chef.asked == [9001]
+
+
+@pytest.mark.database
+def test_a_superseded_draft_does_not_ask_about_the_same_dinner_twice(db):
+    # 003-the-week.sql permits a draft beside the live plan and `week.save`
+    # writes a fresh draft on every run, so two planning runs for one week
+    # would ask about every dinner twice - and answering both would move the
+    # stock twice, under two different causes.
+    live = _plan(db)
+    eaten = _meal(db, live, TODAY)
+    draft = _plan(db, state="draft")
+    _meal(db, draft, TODAY)
+    assert [meal.id for meal in pages.awaiting(db, TODAY)] == [eaten["id"]]
+
+
+@pytest.mark.database
+def test_with_no_live_plan_the_newest_draft_is_the_one_asked_about(db):
+    older = _plan(db, state="draft")
+    _meal(db, older, TODAY)
+    newer = _plan(db, state="draft")
+    asked = _meal(db, newer, TODAY)
+    assert [meal.id for meal in pages.awaiting(db, TODAY)] == [asked["id"]]
 
 
 @pytest.mark.database

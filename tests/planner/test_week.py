@@ -26,26 +26,38 @@ KEY = "not-a-real-key-0000"
 
 
 class Stub:
-    """As much of recipes.client.Spoonacular as the planner calls."""
+    """As much of recipes.client.Spoonacular as the planner calls.
 
-    def __init__(self, results=None, found=None, error=None):
+    `error` is raised by every call, or by every call after `after` of them,
+    which is how a test says "the first search answered and then the day's
+    points went". `pass_error` refuses the use-it-up pass and nothing else.
+    """
+
+    def __init__(self, results=None, found=None, error=None, after=None, pass_error=None):
         self.results = fixtures.COMPLEX_SEARCH if results is None else results
         self.found = fixtures.FIND_BY_INGREDIENTS if found is None else found
         self.error = error
+        self.after = after
+        self.pass_error = pass_error
         self.searches = []
         self.passes = []
 
     def complex_search(self, **params):
         self.searches.append(params)
-        if self.error is not None:
+        if self._refusing(len(self.searches)):
             raise self.error
         return self.results
 
     def find_by_ingredients(self, ingredients, *, number=10):
         self.passes.append(list(ingredients))
-        if self.error is not None:
+        if self.pass_error is not None:
+            raise self.pass_error
+        if self._refusing(len(self.searches) + len(self.passes)):
             raise self.error
         return self.found
+
+    def _refusing(self, call):
+        return self.error is not None and (self.after is None or call > self.after)
 
 
 def stock(db, today=MONDAY):
@@ -129,14 +141,28 @@ def test_the_pantry_term_leans_towards_what_turns_soonest():
 
 def test_a_dish_that_must_be_bought_for_scores_below_one_that_need_not():
     urgency = {"rice": 1.0}
-    held = week.Candidate(1, ("rice",), 0)
-    bought = week.Candidate(2, ("rice",), 3)
+    held = week.Candidate(1, ("rice",))
+    bought = week.Candidate(2, ("rice",), ("invented lemon", "fictional saffron"))
     assert week.score(held, urgency) > week.score(bought, urgency)
+
+
+def test_what_the_week_already_buys_costs_the_next_dish_nothing():
+    # The buying term is read against the week's basket and not against one
+    # dish at a time: two dinners wanting the same lemon is one lemon, and a
+    # count could never say so.
+    urgency = {"rice": 1.0}
+    candidate = week.Candidate(1, ("rice",), ("invented lemon", "fictional saffron"))
+    assert week.terms(candidate, urgency)["buying"] == -2.0
+    assert week.terms(candidate, urgency, {"invented lemon"})["buying"] == -1.0
+    shares = week.Candidate(2, ("rice",), ("invented lemon",))
+    alone = week.Candidate(3, ("rice",), ("fictional saffron",))
+    basket = {"invented lemon"}
+    assert week.score(shares, urgency, basket=basket) > week.score(alone, urgency, basket=basket)
 
 
 def test_the_objective_has_two_terms_and_a_third_would_be_an_addition():
     urgency = {"rice": 1.0}
-    candidate = week.Candidate(1, ("rice",), 2)
+    candidate = week.Candidate(1, ("rice",), ("invented lemon", "fictional saffron"))
     assert set(week.terms(candidate, urgency)) == {"pantry", "buying"}
     # A weight for a term that does not exist yet is simply not applied, which
     # is what lets cost arrive as one more entry in each and nothing else.
@@ -181,6 +207,28 @@ def test_the_search_goes_out_with_what_turns_soonest_in_front(db):
                             "notional chickpeas", "pretend olive oil"}
     # The second pass asks about what is turning and nothing else.
     assert spoon.passes == [["imaginary parsley"]]
+
+
+@pytest.mark.database
+def test_the_lot_that_turns_today_is_not_buried_by_the_one_bought_to_replace_it(db):
+    # turning_soonest answers one row per lot, soonest first, so assigning by
+    # name let the freshest lot write last and win. Buying a replacement would
+    # then erase the signal that the old one is about to be binned - in the
+    # one term the MVP exists to optimise.
+    pantry.add_perishable(db, "notional chicken", 1, "kg", 1, acquired_on=MONDAY)
+    pantry.add_perishable(db, "notional chicken", 1, "kg", 6, acquired_on=MONDAY)
+    urgency = week._urgency(db, MONDAY + datetime.timedelta(days=1))
+    assert urgency["notional chicken"] == week.URGENT_WEIGHT
+
+
+@pytest.mark.database
+def test_two_lots_of_one_thing_are_one_word_to_search_with(db):
+    pantry.add_perishable(db, "notional chicken", 1, "kg", 2, acquired_on=MONDAY)
+    pantry.add_perishable(db, "notional chicken", 1, "kg", 3, acquired_on=MONDAY)
+    spoon = Stub()
+    planned(db, spoon)
+    assert spoon.passes == [["notional chicken"]]
+    assert spoon.searches[0]["include_ingredients"].count("notional chicken") == 1
 
 
 @pytest.mark.database
@@ -253,6 +301,46 @@ def test_a_dish_with_no_known_ready_time_only_lands_where_there_is_time(db):
 
 
 @pytest.mark.database
+def test_a_dish_whose_yield_is_unknown_is_cooked_for_one_sitting(db):
+    # findByIngredients takes no min_servings and returns no servings, so what
+    # 9003 yields is unknown. A lunch written as its second helping is a lunch
+    # nobody can eat if the dish serves one.
+    stock(db)
+    plan = planned(db)
+    claimed = {meal.eats for meal in plan.meals if meal.kind == week.LEFTOVERS}
+    turning = [index for index, meal in enumerate(plan.meals) if meal.recipe_id == 9003]
+    assert turning
+    assert not set(turning) & claimed
+    assert plan.meals[turning[0]].note == week.ONE_SITTING
+
+
+@pytest.mark.database
+def test_a_dish_from_the_use_it_up_pass_that_says_what_it_yields_may_be_paired(db):
+    # The yield is what the rule is about, and the pass it came back from is
+    # only the usual reason it is unknown.
+    stock(db)
+    feeds_eight = [dict(fixtures.FIND_BY_INGREDIENTS[0], servings=8)]
+    plan = planned(db, Stub(results={"results": []}, found=feeds_eight))
+    claimed = {meal.eats for meal in plan.meals if meal.kind == week.LEFTOVERS}
+    assert claimed
+    assert all(plan.meals[index].recipe_id == 9003 for index in claimed)
+
+
+@pytest.mark.database
+def test_a_line_two_dishes_want_is_charged_to_the_week_once(db):
+    stock(db)
+    both_want_the_lemon = {"results": [
+        fixtures.COMPLEX_SEARCH["results"][0],
+        dict(fixtures.COMPLEX_SEARCH["results"][0], id=9007),
+    ]}
+    plan = planned(db, Stub(results=both_want_the_lemon, found=[]))
+    # Eight cooks, all of them wanting the one lemon the house does not have,
+    # and the week is charged for one lemon.
+    assert len(plan.cooks) == 8
+    assert plan.terms["buying"] == -1.0
+
+
+@pytest.mark.database
 def test_the_meals_marked_skipped_are_left_empty(db):
     stock(db)
     struck = [(DAYS[0], "dinner"), (DAYS[1], "lunch")]
@@ -299,6 +387,39 @@ def test_a_spent_quota_is_a_week_that_says_so(db):
 
     plan = week.plan(db, client.Spoonacular(key=KEY, opener=opener),
                      start=MONDAY, today=MONDAY)
+    assert plan.empty
+    assert "points are spent" in plan.note
+
+
+@pytest.mark.database
+def test_a_refusal_on_the_use_it_up_pass_does_not_throw_the_week_away(db):
+    # The use-it-up pass is the optional second one. A 402 on it used to
+    # discard every dish the searches before it had returned, and the points
+    # those searches cost with them.
+    stock(db)
+    spoon = Stub(pass_error=client.QuotaExhausted("spent", status=402))
+    plan = planned(db, spoon)
+    assert plan.filled
+    assert len(plan.cooks) == 8
+    assert "the week is planned" in plan.note
+    assert "one of the searches was refused" in plan.note
+    assert "points are spent" in plan.note
+
+
+@pytest.mark.database
+def test_a_refusal_after_the_first_search_keeps_what_the_first_one_returned(db):
+    stock(db)
+    spoon = Stub(error=client.QuotaExhausted("spent", status=402), after=1)
+    plan = planned(db, spoon)
+    # The tightest cap answered, and its dishes fit every day of the week.
+    assert plan.filled
+    assert "one of the searches was refused" in plan.note
+
+
+@pytest.mark.database
+def test_a_week_whose_every_search_was_refused_still_says_why(db):
+    stock(db)
+    plan = planned(db, Stub(error=client.QuotaExhausted("spent", status=402)))
     assert plan.empty
     assert "points are spent" in plan.note
 
@@ -371,6 +492,35 @@ def test_closing_a_period_purges_the_pointers(db):
     assert all(meal["recipe_id"] is None for meal in held["meals"])
     # A second close has nothing left to purge, which is the point.
     assert week.close(db, row["id"]) == 0
+
+
+@pytest.mark.database
+def test_planning_a_week_closes_the_weeks_whose_period_has_passed(db):
+    # The purge has to have a caller that exists today. The scheduler that
+    # would run it on a clock is an item below the MVP, and until it lands a
+    # promise nothing calls is a promise nobody keeps (docs/db.md).
+    stock(db)
+    over = week.save(db, planned(db))
+    week.save(db, week.plan(db, Stub(), start=DAYS[-1] + datetime.timedelta(days=1),
+                            today=DAYS[-1] + datetime.timedelta(days=1)))
+    held = week.read(db, over["id"])
+    assert held["plan"]["state"] == "closed"
+    assert held["plan"]["closed_at"] is not None
+    assert all(meal["recipe_id"] is None for meal in held["meals"])
+
+
+@pytest.mark.database
+def test_the_week_being_eaten_is_left_alone_by_the_purge(db):
+    stock(db)
+    row = week.save(db, planned(db))
+    assert week.close_passed(db, today=MONDAY) == 0
+    assert week.read(db, row["id"])["plan"]["state"] == "draft"
+
+    after_it_ended = DAYS[-1] + datetime.timedelta(days=1)
+    assert week.close_passed(db, today=after_it_ended) == 8
+    assert week.read(db, row["id"])["plan"]["state"] == "closed"
+    # A second run has nothing left to purge, which is the point.
+    assert week.close_passed(db, today=after_it_ended) == 0
 
 
 @pytest.mark.database
