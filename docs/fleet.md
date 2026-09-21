@@ -67,10 +67,23 @@ the calendar the first shared resource worth building, ahead of any shared
 database or message bus. For now each agent writes `.ics` and nothing
 reads it; when something does, it arbitrates.
 
-## What is deliberately not decided
+## The substrate, when it comes
 
-The substrate - a scheduler, a mailer, a secrets store, a model endpoint -
-is duplicated in each agent until a second agent shows which parts are
-genuinely common. One example is not a pattern, and a shared library
-designed against a single caller is a guess. The extraction happens when
-the accountant makes the overlap real.
+A shared substrate is wanted: a scheduler, a mailer, a secrets store, a
+model endpoint, and a way in by voice or by chat that every agent answers
+through. It is not built yet, and the reason is timing rather than doubt.
+One example is not a pattern, and a shared library designed against a
+single caller is a guess dressed as architecture. The extraction happens
+when the accountant makes the overlap real, and what it takes from the chef
+will be whatever the chef was already doing plainly.
+
+Keeping that cheap costs nothing now: an agent that owns its data, speaks
+over HTTP and MCP, and holds no state in its own process is one that lifts
+out. An agent that reaches into another's tables is not.
+
+The same seam carries the voice question. A HomePod cannot run code and
+Siri intents want an iOS app, so the way in is a Shortcut calling an agent
+over the tailnet and speaking the reply. That is a few endpoints worded for
+speech, not an integration, and the agent that answers "what am I cooking
+tonight" answers it the same way the accountant will answer "what did I
+spend on food".

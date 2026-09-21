@@ -26,6 +26,31 @@ The decisions the items below assume, so no item has to restate them.
   Cook at $29 a month gives 1,500.
 - **The plan covers lunch and dinner.** Breakfast is out: it is routine
   and does not want suggesting.
+- **A lunch may be a dinner's leftovers or its own dish.** The planner
+  decides which, on what a dinner yields and how much of it is left, so
+  "cooked once, eaten twice" is sometimes one dinner feeding the next
+  day's lunch and sometimes a lunch of its own cooked in a batch. A slot
+  is therefore filled either by a cook or by a portion of an earlier cook,
+  and the schema says which.
+- **Prices are deferred; the seams are not.** The MVP knows nothing about
+  money: no price book, no budget, no stores, no brands, no pack sizes.
+  What it does do is leave the joints where those belong - the pantry
+  holds ingredients so products can arrive under them, the grocery list
+  holds quantities so prices can hang off them, and the planner scores
+  through one objective function so a cost term is an addition and not a
+  rewrite. Adding money should be new columns and one more term, never a
+  reshaping.
+- **There is no API key yet, so fixtures come first.** Everything but the
+  live fetch can be built and tested against hand-written fixtures, which
+  the terms require anyway. The key arrives when the planner is real
+  enough to be worth a paid tier.
+- **The repo is public, with CI.** Lint and tests on every push, as next
+  door. The code is a meal planner; what is private lives in the database
+  and `.env`, neither of which is committed.
+- **The rhythm is configuration.** Two shopping trips and two cooking
+  sessions a week, on days set in the settings rather than assumed by the
+  code, with the trips spread so fresh things arrive nearer to when they
+  are cooked.
 - **The household size is a setting, default one.** The planner reads it;
   nothing hard-codes a serving count.
 - **The board is a web page in the container.** Marking a meal skipped and
@@ -69,7 +94,12 @@ The decisions the items below assume, so no item has to restate them.
   emit calendar events. No substrate is shared until a second agent shows
   what is genuinely common.
 
-## Next
+## Next: the MVP
+
+The smallest thing that is useful: know what is in the house, plan a
+week around it, say what to buy, and stay true as meals are cooked. No
+prices, no budget, no stores, no brands - those are the section below,
+and the seams that let them in are named where they bite.
 
 - **There is no container yet.** The repo holds a README, a gitignore and
   this file. Nothing can be built until there is a runtime, an image and a
@@ -93,8 +123,9 @@ The decisions the items below assume, so no item has to restate them.
   Small, and it rides along with the diet settings. Cost: two hours.
 
 - **Nothing pulls a recipe.** A Spoonacular client, its key read from
-  `.env` and never committed, over `complexSearch` for suggestions and
-  `priceBreakdownWidget` for cost. Two constraints shape it: the terms cap
+  `.env` and never committed, over `complexSearch` for suggestions.
+  `priceBreakdownWidget` waits for the section below, along with the rest
+  of the money. Two constraints shape it: the terms cap
   caching at one hour and require deleting everything obtained if the key
   goes away, so a recipe is fetched and used, never accumulated into a
   local library; and the points quota is small enough that a wasted call
@@ -132,77 +163,68 @@ The decisions the items below assume, so no item has to restate them.
   cheapest day in this file. Risk: ask too often and it gets ignored,
   which is the same as not having it.
 
-- **The price book does not exist.** Whole Foods and Costco publish no
-  API, so a table of the staples actually bought, each with a store, a
-  brand, a product as it is labelled on the shelf, a pack size and a
-  price, kept current by hand. Pack size is the field that earns it:
-  Costco sells in quantities a one-person household cannot finish, and a
-  planner that knows only unit price will buy six pounds of salmon to save
-  forty cents a pound. Brand and product are what turn "chicken stock"
-  into the carton actually bought, so a list is shoppable without standing
-  in the aisle deciding again, and they are what a cart would later search
-  on. This is the user's own record, so unlike a recipe it may be kept
-  indefinitely. Seeded with whatever is bought most often, extended when
-  something new appears on a list. Two more columns carry the deals: a
-  sale price and the date it runs until, so a thing on offer is a thing
-  the planner can reach for while the offer lasts and not after. Cost: a
-  day.
+- **A recipe's words are not the pantry's words.** "2 cups diced
+  tomatoes" has to meet "tomatoes, tinned, 400g" in the cupboard before
+  anything can be subtracted, and the match is fuzzy in two ways even
+  before money enters: the wording differs and the units differ. So a
+  table that maps the one to the other with a conversion, and a way to
+  correct a match by hand, since it will be wrong often enough that a
+  silent wrong answer is worse than an asked question.
 
-- **On the first day it knows nothing.** The pantry is empty, the price
-  book is empty, and until both hold something the planner has nothing to
-  plan from - which puts hours of typing between installing this and
-  getting one useful suggestion, and that is how a personal tool dies
-  before it is adopted. So: a starter price book of the twenty or so
-  things actually bought most weeks, a pantry that fills as shopping is
-  confirmed rather than in one sitting, and a planner that degrades
-  honestly when it knows almost nothing - fewer claims, not worse
-  suggestions dressed up. Cost: a day, most of it deciding what the
-  smallest useful seed is. Risk: a seed shipped as data rather than as the
-  user's own, which puts made-up prices into a budget.
-
-- **An ingredient is not a product.** "2 cups diced tomatoes" has to
-  become "Kirkland diced tomatoes, 28 oz" before it can be priced,
-  subtracted from the pantry or put in a cart, and that mapping is fuzzy
-  in three ways at once: the wording differs, the units differ, and a
-  recipe's amount rarely divides into a pack size. It is currently hidden
-  inside the grocery list as though it were an implementation detail; it
-  is the crux of the list, the pantry maths and the cart alike, and it
-  earns a table of its own - ingredient, product, the conversion between
-  their units - plus a way to correct a match by hand, because it will be
-  wrong often enough that a silent wrong answer is worse than an asked
-  question. Cost: two days.
-
-- **Nothing turns a month into a meal.** The envelope arrives for a
-  period and the planner needs a figure per meal, so something has to
-  divide one by the other, and the naive division is wrong in three ways.
-  Skipped meals shrink the denominator, so a week with four meals struck
-  out is not a week on a quarter of the money. What has already been spent
-  this period has to come off the top, which means the confirmed shops are
-  an input. And a stocked pantry distorts it, because a meal cooked from
-  food bought last month costs the plan nothing this month: the money that
-  leaves at the till and the money attributed to a meal are two different
-  numbers, and conflating them is how a budget silently double-counts.
-  Underspend rolls forward, within a cap, so a lean fortnight does not
-  licence a blowout. Cost: a day; risk: the two numbers above, which want
-  naming in the schema before either is computed.
+  This is the seam the product layer arrives through. In the MVP both
+  sides are ingredients, which is all a pantry needs. When prices come, a
+  product - a brand, a pack size, a shelf label - hangs underneath the
+  ingredient it satisfies, and nothing above has to change. Cost: a day
+  now, another when products land.
 
 - **Nothing plans a week.** The planner proper: lunch and dinner for seven
-  days, each recipe cooked once and eaten twice on consecutive days, meals
-  the user marked skipped left empty, and the whole plan scored against a
-  budget per meal. Servings follow the household setting. The search runs
-  from the pantry outward: `complexSearch` with `includeIngredients` set
-  to what is in stock and `fillIngredients` on, which is the only call
-  that returns used-and-missed alongside the cost and time filters the
-  budget and the cadence need. `findByIngredients` with `ranking=2` and
-  `ignorePantry=true` is the second pass, for a week that has to use up
-  something before it turns. What is on sale in the price book joins that
-  search the same way the pantry does, since both are ingredients worth
-  building a week around, but the two do not weigh the same: an owned
-  ingredient is already paid for and can spoil, a discounted one is
-  neither, so the pantry wins where they disagree. Cost: two days; risk:
-  the budget, the pantry, the deals
-  and the two-day pairing pull against each other, and the first version
-  will want a constraint solver before it wants more heuristics.
+  days, every dish cooked once and eaten twice - the second serving being
+  the next day's lunch where a dinner yields it, or a lunch batch of its
+  own where it does not - and the meals marked skipped left empty.
+  Servings follow the household setting. The search runs from the pantry
+  outward: `complexSearch` with `includeIngredients` set to what is in
+  stock and `fillIngredients` on, which is the only call that returns
+  used-and-missed alongside the time filter the cadence needs.
+  `findByIngredients` with `ranking=2` and `ignorePantry=true` is the
+  second pass, for a week that has to use something up before it turns.
+
+  One objective function, and in the MVP it has two terms: how much of the
+  pantry a week consumes, weighted towards what turns soonest, and how
+  little it must buy. Cost is a third term added later, deals a fourth;
+  they change the weights and not the shape. Cost: two days; risk: the
+  pantry and the pairing already pull against each other, and a third term
+  is the point at which this wants a constraint solver rather than more
+  heuristics.
+
+- **A plan does not become a grocery list.** What the plan needs, minus
+  what the pantry already holds, in quantities that make sense to carry
+  into a shop. No stores, no packs and no prices in the MVP: one list, by
+  aisle if anything. Minimising waste is still the half that matters, and
+  it works without money - an ingredient bought for one meal should be
+  finished by another in the same week, so overlap between the chosen
+  dishes is the thing the planner is rewarded for. Ingredient substitutes
+  are the lever where an overlap almost lands. Splitting by store and
+  rounding to pack sizes are what the price book adds later. Cost: a day.
+
+- **There is nothing to look at.** The board: the week's plan, which meals
+  are skipped, the grocery list by store, the pantry, and the price book.
+  Read-only would be half of it, since marking a skip and correcting the
+  pantry are both writes. Calories and macros ride along on each meal,
+  shown and never scored. Cost: two days.
+
+- **At the stove you need the steps, and they may not be kept.** The
+  board shows a plan; cooking needs the method, and the terms forbid
+  storing it, so the steps are fetched at the moment of cooking. That
+  spends quota on a Tuesday evening and fails outright if the service is
+  down while someone is standing in the kitchen. The honest handling is to
+  fetch on opening a meal, hold it for the hour the terms allow so a
+  reload is free, and say plainly when it cannot be had rather than
+  showing a blank card. Cost: half a day; risk: it is the one moment the
+  whole system is being used in earnest, so failing there costs more trust
+  than failing anywhere else.
+## After the MVP
+
+Ordered, but not started until the loop above works end to end.
 
 - **A recipe serves four and the household is one.** Eating each recipe
   twice means two servings are wanted, and most recipes yield four to six.
@@ -213,18 +235,6 @@ The decisions the items below assume, so no item has to restate them.
   something later has a chance to use it; and prefer, where the score is
   close, a recipe whose natural yield divides cleanly into what is wanted.
   Cost: a day.
-
-- **Nothing survives a week going wrong.** Every item above assumes a
-  plan made on Sunday and a week that obeys it. The week that happens has
-  a meal cooked, a Tuesday eaten out, and a chicken that turned on
-  Wednesday, and by Thursday the plan depends on stock that is gone and
-  budget that is spent. Replanning from a partial week is a different
-  problem from planning a fresh one: what is cooked stays cooked, what is
-  bought stays bought, and only the remainder is solved again. Without it
-  the plan is a document that stops being believed on day three, which is
-  the difference between a tool and a demonstration. Cost: a day and a
-  half; risk: it is tempting to re-run the planner over the whole week,
-  which silently rewrites history.
 
 - **Not everything reheats.** Cooking once and eating twice is right for a
   chili and wrong for a fish, a salad or anything fried, and no source
@@ -248,13 +258,59 @@ The decisions the items below assume, so no item has to restate them.
   that way also catches the thing actually worth avoiding, which is the
   same dinner arriving under a different name. Cost: half a day.
 
-- **A plan does not become a grocery list.** What the plan needs, minus
-  what the pantry holds, resolved against the price book into what to buy
-  at which store in which pack size. Minimising waste is the hard half:
-  a pack bought for one recipe should be finished by another in the same
-  week, so ingredient overlap between chosen recipes is worth more than a
-  marginally cheaper recipe in isolation. Ingredient substitutes are the
-  lever where an overlap almost lands. Cost: two days.
+- **Nothing survives a week going wrong.** Every item above assumes a
+  plan made on Sunday and a week that obeys it. The week that happens has
+  a meal cooked, a Tuesday eaten out, and a chicken that turned on
+  Wednesday, and by Thursday the plan depends on stock that is gone and
+  budget that is spent. Replanning from a partial week is a different
+  problem from planning a fresh one: what is cooked stays cooked, what is
+  bought stays bought, and only the remainder is solved again. Without it
+  the plan is a document that stops being believed on day three, which is
+  the difference between a tool and a demonstration. Cost: a day and a
+  half; risk: it is tempting to re-run the planner over the whole week,
+  which silently rewrites history.
+
+- **The price book does not exist.** Whole Foods and Costco publish no
+  API, so a table of the staples actually bought, each with a store, a
+  brand, a product as it is labelled on the shelf, a pack size and a
+  price, kept current by hand. Pack size is the field that earns it:
+  Costco sells in quantities a one-person household cannot finish, and a
+  planner that knows only unit price will buy six pounds of salmon to save
+  forty cents a pound. Brand and product are what turn "chicken stock"
+  into the carton actually bought, so a list is shoppable without standing
+  in the aisle deciding again, and they are what a cart would later search
+  on. This is the user's own record, so unlike a recipe it may be kept
+  indefinitely. Seeded with whatever is bought most often, extended when
+  something new appears on a list. Two more columns carry the deals: a
+  sale price and the date it runs until, so a thing on offer is a thing
+  the planner can reach for while the offer lasts and not after. Cost: a
+  day.
+
+- **Nothing turns a month into a meal.** The envelope arrives for a
+  period and the planner needs a figure per meal, so something has to
+  divide one by the other, and the naive division is wrong in three ways.
+  Skipped meals shrink the denominator, so a week with four meals struck
+  out is not a week on a quarter of the money. What has already been spent
+  this period has to come off the top, which means the confirmed shops are
+  an input. And a stocked pantry distorts it, because a meal cooked from
+  food bought last month costs the plan nothing this month: the money that
+  leaves at the till and the money attributed to a meal are two different
+  numbers, and conflating them is how a budget silently double-counts.
+  Underspend rolls forward, within a cap, so a lean fortnight does not
+  licence a blowout. Cost: a day; risk: the two numbers above, which want
+  naming in the schema before either is computed.
+
+- **On the first day it knows nothing.** The pantry is empty, the price
+  book is empty, and until both hold something the planner has nothing to
+  plan from - which puts hours of typing between installing this and
+  getting one useful suggestion, and that is how a personal tool dies
+  before it is adopted. So: a starter price book of the twenty or so
+  things actually bought most weeks, a pantry that fills as shopping is
+  confirmed rather than in one sitting, and a planner that degrades
+  honestly when it knows almost nothing - fewer claims, not worse
+  suggestions dressed up. Cost: a day, most of it deciding what the
+  smallest useful seed is. Risk: a seed shipped as data rather than as the
+  user's own, which puts made-up prices into a budget.
 
 - **Neither cadence is scheduled.** Two kinds of event, one format. Each
   recipe publishes a ready time, so the plan groups its cooking into at
@@ -268,23 +324,6 @@ The decisions the items below assume, so no item has to restate them.
   Sunday, which is the outcome nobody wants and the arithmetic prefers.
   Cost: a day; risk: two trips and two cook sessions constrain each other
   through shelf life, because a Thursday shop cannot feed a Monday cook.
-
-- **There is nothing to look at.** The board: the week's plan, which meals
-  are skipped, the grocery list by store, the pantry, and the price book.
-  Read-only would be half of it, since marking a skip and correcting the
-  pantry are both writes. Calories and macros ride along on each meal,
-  shown and never scored. Cost: two days.
-
-- **At the stove you need the steps, and they may not be kept.** The
-  board shows a plan; cooking needs the method, and the terms forbid
-  storing it, so the steps are fetched at the moment of cooking. That
-  spends quota on a Tuesday evening and fails outright if the service is
-  down while someone is standing in the kitchen. The honest handling is to
-  fetch on opening a meal, hold it for the hour the terms allow so a
-  reload is free, and say plainly when it cannot be had rather than
-  showing a blank card. Cost: half a day; risk: it is the one moment the
-  whole system is being used in earnest, so failing there costs more trust
-  than failing anywhere else.
 
 - **Nothing runs unattended.** A clock of its own, as a service beside the
   board rather than a thread inside it or a cron daemon under it, waking
@@ -365,6 +404,17 @@ The decisions the items below assume, so no item has to restate them.
   into an empty database. Unlike a recipe, this is the user's own record,
   so nothing forbids keeping it. Cost: half a day.
 
+- **The kitchen cannot ask out loud.** "What am I cooking tonight" and
+  "add milk to the list" are questions asked with both hands busy, which
+  is the one moment a screen is the wrong answer. A HomePod cannot run
+  code, and Siri intents want an iOS app, so the path is a Shortcut: it
+  calls AIoli over the tailnet and speaks the reply, and "Hey Siri, run
+  dinner" reaches it from the HomePod. That makes it a few endpoints
+  worded for speech rather than an integration, which is why it is cheap
+  and why it wants the HTTP surface to be clean first. Cost: half a day,
+  once there is something worth asking. Risk: a Shortcut is a thing a
+  person maintains by hand on a phone, and it breaks quietly.
+
 - **The list has to be retyped into a cart.** Last, and only once the
   list is trustworthy: fill an Amazon Whole Foods cart from the Whole
   Foods half of the week's list, matching each line to the brand and
@@ -375,7 +425,6 @@ The decisions the items below assume, so no item has to restate them.
   reviews it and buys it, or does not. Cost: three to four days; risk: a
   session that expires, a substitution the store makes silently, and a
   page layout that changes without notice.
-
 ## Done
 
 *Empty. A finished item moves up here with the branch or short commit it
