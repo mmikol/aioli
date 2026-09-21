@@ -72,6 +72,12 @@ The decisions the items below assume, so no item has to restate them.
   the house first and bought for second. Waste is the thing being
   minimised, and an ingredient already owned and ageing is worth more than
   a cheaper recipe that leaves it to spoil.
+- **The pantry is precise only where things spoil.** A perishable carries
+  a real quantity, a unit and a date, because that is where waste happens
+  and where the arithmetic has to work. A staple - rice, oil, flour, a
+  spice - is in stock or running low and nothing more. Nobody weighs their
+  rice, and a pantry that asks them to is a pantry abandoned inside a
+  fortnight; the precision is spent where it is repaid.
 - **Nutrition is shown, not yet optimised.** Spoonacular returns calories
   and macros with the recipe, so the board and the mails carry them and
   the schema stores them. The planner does not read them today: budget and
@@ -100,6 +106,12 @@ The smallest thing that is useful: know what is in the house, plan a
 week around it, say what to buy, and stay true as meals are cooked. No
 prices, no budget, no stores, no brands - those are the section below,
 and the seams that let them in are named where they bite.
+
+Done is a month of real use, not a green test run. Four weeks including
+the ones where dinner was eaten out and the pantry drifted, because those
+are the weeks that say whether the confirm loop holds. Which means the
+confirming has to cost almost nothing: if it rots, the first thing to
+pull forward from below is the midweek nudge, not another feature.
 
 - **There is no container yet.** The repo holds a README, a gitignore and
   this file. Nothing can be built until there is a runtime, an image and a
@@ -144,11 +156,14 @@ and the seams that let them in are named where they bite.
   a suite that has to be thrown away. Cost: half a day.
 
 - **The pantry is not written down.** A table of what is in the fridge and
-  the cupboard, with quantity, unit, the date it came in and a rough shelf
-  life, editable from the board. Everything downstream reads it: the
-  planner searches against it, the grocery list subtracts it, and waste is
-  measured against it. The shelf life is what makes ageing stock rank
-  ahead of fresh, so it is not an optional column. Cost: a day.
+  the cupboard, in two grades. A perishable carries a quantity, a unit,
+  the date it came in and a rough shelf life; a staple carries only
+  whether it is in stock or running low. Editable from the board, and the
+  grade is a column rather than two tables, so a thing can change grade
+  without moving. Everything downstream reads it: the planner searches
+  against it, the grocery list subtracts it, and waste is measured against
+  it. The shelf life is what makes ageing stock rank ahead of fresh, so on
+  a perishable it is not optional. Cost: a day.
 
 - **The pantry has no way to tell the truth.** Nothing decrements it when
   a meal is cooked, increments it when a shop happens, or records that

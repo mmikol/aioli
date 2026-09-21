@@ -49,7 +49,7 @@ could.
 | --- | --- |
 | `settings` | one row per household fact - size, budget envelope, diet, cook cadence - each with its value and where it came from |
 | `equipment` | what is in the kitchen, so a recipe wanting a pan that is not there can be dropped |
-| `pantry` | what is in the house: item, quantity, unit, acquired, shelf life |
+| `pantry` | what is in the house, in two grades: a perishable with quantity, unit, acquired and shelf life; a staple with only in-stock or low |
 | `stock_move` | every change to the pantry: bought, cooked, finished, discarded, with what caused it |
 | `price_book` | store, brand, product as labelled, pack size, price, sale price, sale until |
 | `ingredient_product` | the fuzzy join: an ingredient as a recipe words it, the product it resolves to, the conversion between their units, and whether a person confirmed it |
