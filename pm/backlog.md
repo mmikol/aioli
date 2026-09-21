@@ -41,11 +41,20 @@ The decisions the items below assume, so no item has to restate them.
   the house first and bought for second. Waste is the thing being
   minimised, and an ingredient already owned and ageing is worth more than
   a cheaper recipe that leaves it to spoil.
-- **Nutrition is shown, never optimised.** Spoonacular returns calories
-  and macros with the recipe, so the board and the mails carry them. The
-  planner does not read them. Budget and waste are the two objectives, and
-  a third pulling against both buys a harder solver for a goal nobody
-  asked for.
+- **Nutrition is shown, not yet optimised.** Spoonacular returns calories
+  and macros with the recipe, so the board and the mails carry them and
+  the schema stores them. The planner does not read them today: budget and
+  waste are the two objectives, and a third pulling against both buys a
+  harder solver for a goal nobody has set. "Not yet" rather than "never" -
+  a trainer agent is exactly what would hand the chef a protein floor, and
+  a schema that dropped the numbers would owe a migration on the day it
+  arrived.
+- **AIoli is the first of several agents.** An accountant and a trainer
+  are expected, and the contract they will all keep is in
+  [docs/fleet.md](../docs/fleet.md): own your data, expose MCP tools,
+  propose but never complete an irreversible act, run on your own clock,
+  emit calendar events. No substrate is shared until a second agent shows
+  what is genuinely common.
 
 ## Next
 
@@ -197,6 +206,24 @@ The decisions the items below assume, so no item has to restate them.
   summary being how it earns the open. SMTP credentials in `.env` beside
   the API key. Cost: a day; risk: a mail nobody reads is a pantry nobody
   corrects, so brevity is a requirement and not a preference.
+
+- **The household's facts are the chef's columns.** Household size, the
+  budget, the evenings that are free and what the household will not eat
+  are facts about the household, lodged with the chef only because the
+  chef exists first. An accountant wants the first two and a trainer the
+  last, so they belong in a table of their own rather than scattered as
+  columns on whatever needed them. Doing it now is a table; doing it after
+  the accountant is a migration and a reconciliation. Cost: half a day.
+
+- **Nothing outside can ask AIoli anything.** The functions the chef
+  already has internally - the week's plan, what is in the pantry, the
+  grocery list, the cooking sessions - published as MCP tools, read-only
+  to start. This is the whole integration story for the fleet, and it is
+  nearly free precisely because the functions exist anyway: an accountant
+  reconciling a grocery spend should not need to know what a recipe is.
+  Worth doing once the planner and the list are real, and not before,
+  since a tool over a function that does not work yet is a lie with a
+  schema. Cost: half a day.
 
 - **The hand-entered data has no copy.** The price book and the pantry are
   hours of a person's typing and exist nowhere else; a dropped volume
