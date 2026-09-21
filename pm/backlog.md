@@ -230,16 +230,23 @@ The decisions the items below assume, so no item has to restate them.
   chili and wrong for a fish, a salad or anything fried, and no source
   publishes a keeps-well flag to sort them. Without one the planner will
   confidently pair a thing that is inedible on the second day, which is
-  the fastest way to lose trust in the whole plan. A judgement stored per
-  recipe, defaulted by category and corrected on the board when a pairing
-  turns out badly; a recipe that does not keep is cooked for one meal and
-  the pairing rule bends around it. Cost: half a day.
+  the fastest way to lose trust in the whole plan. The judgement is a rule
+  over what a dish is made of and how it was cooked - fried holds badly, a
+  leafy salad holds badly, a braise holds well - and not a verdict filed
+  against a recipe, both because a recipe is not ours to keep
+  ([docs/db.md](../docs/db.md)) and because a rule applies to a dish never
+  seen before, which a verdict cannot. A dish that does not keep is cooked
+  for one meal and the pairing bends around it. Corrections go in when a
+  pairing turns out badly. Cost: half a day.
 
 - **The same dinner every week.** A fixed budget, a fixed household and a
   stable pantry give the planner one right answer, and it will keep
-  finding it. A table of what has been planned before and a cooldown that
-  costs a recent recipe its place, so variety is a constraint rather than
-  a hope. Cost: half a day.
+  finding it. The cooldown runs over what was eaten and not over which
+  recipe was chosen - chicken thigh three times this month, braised twice
+  running - because the household's eating history is the household's to
+  keep, while a recipe is not ([docs/db.md](../docs/db.md)). Reading it
+  that way also catches the thing actually worth avoiding, which is the
+  same dinner arriving under a different name. Cost: half a day.
 
 - **A plan does not become a grocery list.** What the plan needs, minus
   what the pantry holds, resolved against the price book into what to buy
