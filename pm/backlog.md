@@ -49,12 +49,13 @@ The decisions the items below assume, so no item has to restate them.
   a trainer agent is exactly what would hand the chef a protein floor, and
   a schema that dropped the numbers would owe a migration on the day it
   arrived.
-- **The budget is given, not decided.** The chef is handed a figure per
-  meal and plans inside it. It does not set one, carry one between weeks,
-  or judge what the household can afford; what it hands back is what a
-  plan costs. Today that figure is typed into the settings; when an
-  accountant exists it arrives from there through the same field. An agent
-  does not own a value because it optimises against one.
+- **The amount is given; the split is the chef's.** The chef is handed an
+  envelope for a period - a month, eventually from the accountant, typed
+  into the settings until then - and works out for itself what that means
+  per meal. Deciding the size of the envelope is not its business; dividing
+  one across the meals actually planned is exactly its business, being a
+  planning problem. What it hands back is what a plan costs, which is the
+  number the accountant wants anyway.
 - **AIoli is the first of several agents.** An accountant and a trainer
   are expected, and the contract they will all keep is in
   [docs/fleet.md](../docs/fleet.md): own your data, expose MCP tools,
@@ -136,6 +137,20 @@ The decisions the items below assume, so no item has to restate them.
   their units - plus a way to correct a match by hand, because it will be
   wrong often enough that a silent wrong answer is worse than an asked
   question. Cost: two days.
+
+- **Nothing turns a month into a meal.** The envelope arrives for a
+  period and the planner needs a figure per meal, so something has to
+  divide one by the other, and the naive division is wrong in three ways.
+  Skipped meals shrink the denominator, so a week with four meals struck
+  out is not a week on a quarter of the money. What has already been spent
+  this period has to come off the top, which means the confirmed shops are
+  an input. And a stocked pantry distorts it, because a meal cooked from
+  food bought last month costs the plan nothing this month: the money that
+  leaves at the till and the money attributed to a meal are two different
+  numbers, and conflating them is how a budget silently double-counts.
+  Underspend rolls forward, within a cap, so a lean fortnight does not
+  licence a blowout. Cost: a day; risk: the two numbers above, which want
+  naming in the schema before either is computed.
 
 - **Nothing plans a week.** The planner proper: lunch and dinner for seven
   days, each recipe cooked once and eaten twice on consecutive days, meals

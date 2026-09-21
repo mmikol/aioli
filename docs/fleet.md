@@ -45,7 +45,7 @@ them out later is a move and not a rewrite.
 | fact | who owns it | what the chef does with it |
 | --- | --- | --- |
 | household size | the household | reads it; servings follow it |
-| the budget | the accountant, when it exists | reads it; plans within it |
+| the food budget | the accountant, when it exists | reads the period's envelope; splits it across meals itself |
 | calendar availability | the household | reads it; schedules around it |
 | dietary constraints | the trainer, when it exists | reads it; filters on it |
 
